@@ -1,4 +1,4 @@
-# dsh-orchard bundle patch: inserts this plugin into a profile's layer stack.
+# dsh-fleet bundle patch: inserts this plugin into a profile's layer stack.
 - insert:
-    - id: harness-orchard
-      name: 'dsh-orchard'
+    - id: harness-fleet
+      name: 'dsh-fleet'

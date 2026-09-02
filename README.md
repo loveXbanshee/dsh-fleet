@@ -1,20 +1,20 @@
-# dsh-orchard · Harness 果园
+# dsh-fleet · Harness Fleet
 
-> **Punica Studio** 出品 · 原名 `dsh-harness-workbench`
-> (*Punica* 是石榴属;这一片"果园"里,每一棵 Harness 实例都是你种的树。)
+> **Punica Studio** 出品 · 曾用名 `dsh-harness-workbench`
+> 一艘 Harness "舰队"的指挥台:本机与远端每一艘 Harness,都在一个面板里瞭望、调度、续接。
 
-一个 DeepSeek Harness Web 插件:在**设置 → Harness 果园**里用一个面板管理
+一个 DeepSeek Harness Web 插件:在**设置 → Harness Fleet** 里用一个面板统管
 多台 Harness —— 只显示运行中的本机实例(需要时手动固定端口)、登记多台远程
 Harness、统一探活、一键打开/启停,**并能跨设备读取其它机器上的历史对话记录**,
 让旧会话可以原地续聊而不是重新开始。
 
-> English: dsh-orchard by Punica Studio. One settings page for your DeepSeek
+> English: dsh-fleet by Punica Studio. A fleet console for your DeepSeek
 > Harness instances — running local ones auto-listed, remote harnesses
 > registered and probed, local start/stop — plus, since v0.2, token-gated
 > **reading of conversation history stored on other machines**, so past
 > sessions can be browsed, exported, or continued in place.
 
-## 它能做什么(v0.3)
+## 它能做什么(v0.4)
 
 ### 实例管理
 - **本机实例只列出运行中的** — 自动探测 127.0.0.1:3080–3129,仅显示**在线且是
@@ -35,31 +35,31 @@ Harness、统一探活、一键打开/启停,**并能跨设备读取其它机器
 - 令牌**恒由宿主端持有并转发**,浏览器永不接触;日志含敏感信息,令牌请当密码,
   优先走可信网络(Tailscale/https)。
 
-### 关于“继续对话,不重新开始”
+### 关于"继续对话,不重新开始"
 会话日志只属于产生它的那台机器。要**原地续聊**:在远程卡片点「打开」进入那台
 Harness 的 Web UI,从会话列表进入原会话继续 —— 上下文、文件与历史都在。
-要本地引用/迁移内容,可把会话“复制为 Markdown”粘进新会话。
+要本地引用/迁移内容,可把会话"复制为 Markdown"粘进新会话。
 
 ## 安装
 
 ### 方式 A:本地代码直接装(开发/自用)
 ```sh
-dsh plugin --profile web add "D:/00Software/DeepSeekHarness/dsh-orchard"
+dsh plugin --profile web add "D:/00Software/DeepSeekHarness/dsh-fleet"
 ```
 然后(若未走 CLI bundle 自动登记)把下行追加到
 `~/.dsh/profiles/web/cordis.patch.yml`:
 ```yaml
 - insert:
-    - id: harness-orchard
-      name: 'dsh-orchard'
+    - id: harness-fleet
+      name: 'dsh-fleet'
 ```
-刷新页面 → **设置 → Harness 果园**。宿主代码改动后需**重启一次 `dsh web`**。
+刷新页面 → **设置 → Harness Fleet**。宿主代码改动后需**重启一次 `dsh web`**。
 
 ### 方式 B:从 GitHub 分发(推荐)
-仓库:https://github.com/loveXbanshee/dsh-orchard
+仓库:https://github.com/loveXbanshee/dsh-fleet
 
 ```sh
-dsh plugin --profile web add github:loveXbanshee/dsh-orchard
+dsh plugin --profile web add github:loveXbanshee/dsh-fleet
 ```
 然后**重启一次 `dsh web`**。包声明了 `dsh.bundle`,CLI 会自动登记为 bundle 层,
 无需手改 yml。更新版本:重跑同一条命令(或上架市场后用市场更新)。
@@ -68,19 +68,19 @@ dsh plugin --profile web add github:loveXbanshee/dsh-orchard
 > `dsh plugin add`,否则重启后重复插入。
 
 ## 跨设备读取的设置步骤
-1. 在目标机器(装有本插件)设置一个共享令牌 → 状态显示“会话服务已开启”
-   (写入 `~/.dsh/dsh-orchard.json`;旧版配置文件会自动迁移)。
+1. 在目标机器(装有本插件)设置一个共享令牌 → 状态显示"会话服务已开启"
+   (写入 `~/.dsh/dsh-fleet.json`;旧版配置会自动迁移)。
 2. 在工作台所在机器「远程 Harness」添加对方地址,会话令牌填**同一个令牌**。
-3. 点该远程卡片的「会话」→ 列出对方全部会话(可“加载全部标题”),展开读全文 /
+3. 点该远程卡片的「会话」→ 列出对方全部会话(可"加载全部标题"),展开读全文 /
    复制 Markdown / 在对方 Web UI 里继续该会话。
 
 ## 安全模型
 - 变更类接口:仅**同源 + 回环** POST;本机会话内容接口仅回环;
 - 对外服务接口(`/api/sessions`、`/api/session-content`)必须携带匹配
   `serveToken` 的令牌,否则 403;未设置令牌时默认关闭;
-- 远程令牌只存宿主配置、响应不回传;内容按量截断并给出“过长已截断”标记。
+- 远程令牌只存宿主配置、响应不回传;内容按量截断并给出"过长已截断"标记。
 
-## API(宿主注册,前缀 `/dsh-orchard/api`)
+## API(宿主注册,前缀 `/dsh-fleet/api`)
 | 路由 | 方法 | 说明 |
 | --- | --- | --- |
 | `/state` | GET | 实例快照(含 serveSessions) |
@@ -94,7 +94,7 @@ dsh plugin --profile web add github:loveXbanshee/dsh-orchard
 | `/remote-sessions` `/remote-session-content` | GET | 代理远程(本机用) |
 | `/sessions` `/session-content` | GET | **对外服务**(需 `?token=`) |
 
-## 配置示例(`~/.dsh/dsh-orchard.json`)
+## 配置示例(`~/.dsh/dsh-fleet.json`)
 ```json
 {
   "range": { "start": 3080, "end": 3129 },

@@ -1,15 +1,15 @@
 {
-  "name": "dsh-orchard",
-  "version": "0.3.0",
-  "description": "dsh-orchard — Punica Studio. A multi-harness orchard for DeepSeek Harness Web: manage local + remote dsh instances from one place and read cross-device conversation history (token-gated), so past sessions never restart. 原名 dsh-harness-workbench。Harness 果园：一个面板管理本机与多台远程 Harness 并可跨设备读取原有对话记录。",
+  "name": "dsh-fleet",
+  "version": "0.4.0",
+  "description": "dsh-fleet — Punica Studio. A multi-harness fleet console for DeepSeek Harness Web: manage local + remote dsh instances from one place and read cross-device conversation history (token-gated), so past sessions never restart. 原名 dsh-harness-workbench。Harness Fleet：一个面板统管本机与多台远程 Harness 并可跨设备读取原有对话记录。",
   "type": "module",
   "main": "lib/index.js",
   "license": "MIT",
   "author": "Punica Studio",
-  "homepage": "https://github.com/loveXbanshee/dsh-orchard",
+  "homepage": "https://github.com/loveXbanshee/dsh-fleet",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/loveXbanshee/dsh-orchard.git"
+    "url": "git+https://github.com/loveXbanshee/dsh-fleet.git"
   },
   "keywords": [
     "deepseek",
@@ -18,7 +18,7 @@
     "dsh-plugin",
     "punica",
     "multi-harness",
-    "orchard",
+    "fleet",
     "remote",
     "sessions"
   ],
