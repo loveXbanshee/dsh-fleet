@@ -1,4 +1,4 @@
-# dsh-harness-workbench profile patch: registers the plugin as a row.
+# dsh-orchard bundle patch: inserts this plugin into a profile's layer stack.
 - insert:
-    - id: harness-workbench
-      name: 'dsh-harness-workbench'
+    - id: harness-orchard
+      name: 'dsh-orchard'

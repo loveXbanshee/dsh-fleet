@@ -1,24 +1,25 @@
 /**
- * dsh-harness-workbench — browser client.
+ * dsh-orchard — browser client (Punica Studio).
  *
- * Settings page "Harness 工作台":
+ * Settings page "Harness 果园" (formerly dsh-harness-workbench / Harness 工作台):
  *   - Local instances: ONLY running DSH instances are listed automatically.
  *     Stopped ports never clutter the list — add a port manually if you want
  *     to keep an entry (e.g. to start it) while it is down.
  *   - Remote registry + probe/open + token-gated conversation browser across
  *     other devices running this plugin.
  */
-window.__ModuleLoader__.load({ id: "dsh-harness-workbench", factory: (require) => {
+window.__ModuleLoader__.load({ id: "dsh-orchard", factory: (require) => {
 	var module = { exports: {} };
 	var exports = module.exports;
 	var React = require("react");
 	var h = React.createElement;
 
-	var name = "dsh-harness-workbench";
+	var name = "dsh-orchard";
 	var inject = ["slots"];
-	var API = "/dsh-harness-workbench/api";
-	var SECTION_ID = "workbench";
-	var SECTION_LABEL = "Harness 工作台";
+	var API = "/dsh-orchard/api";
+	var SECTION_ID = "orchard";
+	var SECTION_LABEL = "Harness 果园";
+	var BRAND = "Punica Studio";
 	var PINS_KEY = "dsh-harness-workbench.pins.v1";
 
 	/* ---- pinned local ports (browser-local, surviving refresh) ---- */
@@ -395,7 +396,7 @@ window.__ModuleLoader__.load({ id: "dsh-harness-workbench", factory: (require) =
 		return h("div", { className: "hw" },
 			h("style", null, CSS),
 			h("div", { className: "hw-head" },
-				h("div", { className: "hw-title hw-big" }, "Harness 工作台", h("span", { className: "hw-meta" }, "v" + (data.version || "?"))),
+				h("div", { className: "hw-title hw-big" }, "Harness 果园", h("span", { className: "hw-meta" }, "Orchard · v" + (data.version || "?")), h("span", { className: "hw-meta" }, "by " + BRAND)),
 				h("div", { className: "hw-actions" },
 					btn(busy ? "刷新中…" : "刷新", function () { refresh(false); }, null, busy),
 					btn("重新扫描", function () { refresh(true); }, null, busy))),
@@ -431,7 +432,7 @@ window.__ModuleLoader__.load({ id: "dsh-harness-workbench", factory: (require) =
 				"其他设备装好本插件后:在它们的远程列表用同一令牌添加本机地址,即可读取本机历史会话;令牌请放可信网络(Tailscale/https)内传输。"),
 
 			h("div", { className: "hw-foot" },
-				"「本机会话」= 读取当前 DSH_HOME 的会话日志。跨设备继续旧对话:打开远端 Web 界面进入原会话即可续聊(记录不会重开),或把会话复制为 Markdown 到本地新会话。"));
+				"dsh-orchard " + BRAND + " · 「本机会话」= 读取当前 DSH_HOME 的会话日志。跨设备继续旧对话:打开远端 Web 界面进入原会话即可续聊(记录不会重开),或把会话复制为 Markdown 到本地新会话。"));
 	}
 
 	/* ---------------- session panel (shared) ---------------- */

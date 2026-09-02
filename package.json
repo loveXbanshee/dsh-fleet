@@ -1,10 +1,27 @@
 {
-  "name": "dsh-harness-workbench",
-  "version": "0.2.1",
-  "description": "Multi-Harness Workbench for DeepSeek Harness Web: auto-discover local dsh web instances (ports 3080-3129), register remote harnesses, probe status, open/start/stop them, AND read conversation history from other devices (token-gated) so old sessions never have to restart. DSH 多 Harness 工作台：一个面板管理本机与多台远程 Harness，并可跨设备读取原有对话记录。",
+  "name": "dsh-orchard",
+  "version": "0.3.0",
+  "description": "dsh-orchard — Punica Studio. A multi-harness orchard for DeepSeek Harness Web: manage local + remote dsh instances from one place and read cross-device conversation history (token-gated), so past sessions never restart. 原名 dsh-harness-workbench。Harness 果园：一个面板管理本机与多台远程 Harness 并可跨设备读取原有对话记录。",
   "type": "module",
   "main": "lib/index.js",
   "license": "MIT",
+  "author": "Punica Studio",
+  "homepage": "https://github.com/loveXbanshee/dsh-orchard",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/loveXbanshee/dsh-orchard.git"
+  },
+  "keywords": [
+    "deepseek",
+    "harness",
+    "dsh",
+    "dsh-plugin",
+    "punica",
+    "multi-harness",
+    "orchard",
+    "remote",
+    "sessions"
+  ],
   "files": [
     "lib",
     "client",
