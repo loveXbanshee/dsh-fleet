@@ -1,0 +1,41 @@
+{
+  "name": "dsh-harness-workbench",
+  "version": "0.2.1",
+  "description": "Multi-Harness Workbench for DeepSeek Harness Web: auto-discover local dsh web instances (ports 3080-3129), register remote harnesses, probe status, open/start/stop them, AND read conversation history from other devices (token-gated) so old sessions never have to restart. DSH 多 Harness 工作台：一个面板管理本机与多台远程 Harness，并可跨设备读取原有对话记录。",
+  "type": "module",
+  "main": "lib/index.js",
+  "license": "MIT",
+  "files": [
+    "lib",
+    "client",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./client/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "check": "node --check lib/index.js && node --check client/client.js"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [],
+      "platform": "web"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": ">=4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    }
+  }
+}

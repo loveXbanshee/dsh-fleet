@@ -1,0 +1,4 @@
+# dsh-harness-workbench profile patch: registers the plugin as a row.
+- insert:
+    - id: harness-workbench
+      name: 'dsh-harness-workbench'
