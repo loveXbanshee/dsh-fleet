@@ -296,6 +296,9 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 		var addTokenState = React.useState("");
 		var addToken = addTokenState[0];
 		var setAddToken = addTokenState[1];
+		var addInsecureState = React.useState(false);
+		var addInsecure = addInsecureState[0];
+		var setAddInsecure = addInsecureState[1];
 		var serveTokenState = React.useState("");
 		var serveTokenDraft = serveTokenState[0];
 		var setServeTokenDraft = serveTokenState[1];
@@ -378,8 +381,8 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 		function submitRemote(event) {
 			event.preventDefault();
 			if (!addOrigin.trim()) { setError("请输入远程地址"); return; }
-			runAction("add-remote", { name: addName.trim(), origin: addOrigin.trim(), token: addToken.trim() })
-				.then(function () { setAddName(""); setAddOrigin(""); setAddToken(""); });
+			runAction("add-remote", { name: addName.trim(), origin: addOrigin.trim(), token: addToken.trim(), insecure: addInsecure })
+				.then(function () { setAddName(""); setAddOrigin(""); setAddToken(""); setAddInsecure(false); });
 		}
 
 		if (!data) {
@@ -448,22 +451,31 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 			var target = { kind: "remote", id: item.id };
 			var sessKey = targetKey(target);
 			var sess = sessions[sessKey] || {};
+			var isHttps = /^https:\/\//i.test(item.origin);
+			var isCertErr = !item.online && /CERT|SELF_SIGNED|UNABLE_TO_GET_ISSUER/i.test(item.error || "");
 			return h("div", { className: "hw-card", key: "r" + item.id },
 				h("div", { className: "hw-row" },
 					dot(stateKey),
 					h("div", { className: "hw-main" },
 						h("div", { className: "hw-title" }, item.name,
 							item.gateway ? h("span", { className: "hw-badge hw-badge-self" }, "Fleet 网关") : null,
+							item.insecure ? h("span", { className: "hw-badge" }, "信任自签证书") : null,
 							item.hasToken ? h("span", { className: "hw-badge" }, "会话令牌已配置") : h("span", { className: "hw-badge" }, "未配令牌"),
 							item.rev ? h("span", { className: "hw-meta" }, "rev " + item.rev.slice(0, 8)) : null,
 							item.online ? h("span", { className: "hw-meta" }, item.ms + " ms") : null),
 						h("div", { className: "hw-sub" },
 							item.origin,
-							item.online ? (item.dsh ? "" : item.gateway ? " · Fleet 网关(会话可读)" : " · 非 Harness 页面") : (" · 不可达" + (item.error && item.error !== "unreachable" ? " (" + item.error + ")" : "") + " — 请在目标设备开启 Fleet 网关,或让 dsh 绑定局域网IP/隧道;地址不要用 127.0.0.1"))),
+							item.online ? (item.dsh ? "" : item.gateway ? " · Fleet 网关(会话可读)" : " · 非 Harness 页面")
+								: (isCertErr ? " · 证书不受信任(" + item.error + ") — 该地址是自签 https,点「信任自签证书」即可放行"
+									: " · 不可达" + (item.error && item.error !== "unreachable" ? " (" + item.error + ")" : "") + " — 请在目标设备开启 Fleet 网关,或让 dsh 绑定局域网IP/隧道;地址不要用 127.0.0.1"))),
 					h("div", { className: "hw-actions" },
 						btn("会话", function () { loadSessions(target, false); }, { title: "读取该设备上的会话记录(需要它在同一插件里配置 serveToken)" }, !okOnline || !item.hasToken),
 						btn("打开", function () { openOrigin(item.origin); }, null, !item.online),
 						btn("复制", function () { copyText(item.origin); }),
+						isHttps ? (item.insecure
+							? btn("取消信任自签", function () { runAction("set-remote-insecure", { id: item.id, insecure: false }).then(function () { refresh(true); }); }, null, busy)
+							: btn(isCertErr ? "信任自签证书并重试" : "信任自签证书", function () { runAction("set-remote-insecure", { id: item.id, insecure: true }).then(function () { refresh(true); }); }, { className: "hw-btn hw-btn-warn" }, busy))
+							: null,
 						btn("移除", function () {
 							if (window.confirm("移除远程实例「" + item.name + "」?")) runAction("remove-remote", { id: item.id });
 						}, { className: "hw-btn hw-btn-danger" }))),
@@ -495,6 +507,9 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 				h("input", { className: "hw-input", style: { flex: "1 1 130px" }, placeholder: "名称(可选)", value: addName, onChange: function (e) { setAddName(e.target.value); } }),
 				h("input", { className: "hw-input", style: { flex: "1 1 190px" }, placeholder: "http://主机:端口", value: addOrigin, onChange: function (e) { setAddOrigin(e.target.value); } }),
 				h("input", { className: "hw-input", style: { flex: "1 1 140px" }, placeholder: "会话令牌(可选)", value: addToken, onChange: function (e) { setAddToken(e.target.value); } }),
+				h("label", { className: "hw-row", style: { gap: "6px", flex: "0 1 auto" } },
+					h("input", { type: "checkbox", checked: addInsecure, onChange: function (e) { setAddInsecure(e.target.checked); } }),
+					h("span", { className: "hw-hint" }, "信任自签 https")),
 				h("button", { className: "hw-btn", type: "submit", disabled: busy }, "添加并探测")),
 			remoteCards.length ? remoteCards : h("div", { className: "hw-empty" }, "尚未添加远程 Harness"),
 
@@ -647,6 +662,7 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 		".hw-btn:hover:not(:disabled){background:rgba(128,128,128,.12)}",
 		".hw-btn:disabled{opacity:.45;cursor:not-allowed}",
 		".hw-btn-danger{border-color:rgba(239,68,68,.5);color:#ef4444}",
+		".hw-btn-warn{border-color:rgba(234,179,8,.6);color:#ca8a04}",
 		".hw-btn-primary{border-color:rgba(34,197,94,.6);color:#16a34a;font-weight:600}",
 		".hw-btn-mini{padding:1px 6px;font-size:11px}",
 		".hw-input{background:transparent;border:1px solid rgba(128,128,128,.35);border-radius:6px;padding:4px 8px;font-size:12px;color:inherit;min-width:0}",
