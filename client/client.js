@@ -1175,7 +1175,7 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 		var dockStyle = { position: "fixed", top: "0px", right: "0px", width: barW + "px", height: viewport.h + "px", pointerEvents: "auto", background: "#101318", color: "#e7e7ea", borderLeft: "1px solid rgba(255,255,255,.1)", display: "flex", flexDirection: "column", boxSizing: "border-box" };
 		var layer = null;
 		if (showRemote && activeDevice) {
-			var frameStyle = { position: "fixed", top: "0px", left: "0px", width: frameW + "px", height: viewport.h + "px", border: "0", background: "#fff", display: "block" };
+			var frameStyle = { position: "fixed", top: "0px", left: "0px", width: frameW + "px", height: viewport.h + "px", border: "0", background: "#fff", display: "block", pointerEvents: "auto", zIndex: 1 };
 			layer = h("iframe", { key: activeDevice.origin, src: activeDevice.origin, style: frameStyle, title: activeDevice.name || "remote dsh", allow: "clipboard-read; clipboard-write; fullscreen" });
 		}
 		return h("div", null, h("style", null, CSS), layer, h("div", { style: dockStyle }, head, body));
