@@ -998,7 +998,7 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 			layout: ctx.get("layout"),
 		};
 		ctx.slots.inject("sidebar.workspaces", function () {
-			return ctx.slots.register({ name: "sidebar.workspaces" }, function (ownerProps) { return h(FleetWorkspaceBrowser, ownerProps); });
+			return ctx.slots.register({ name: "sidebar.workspaces", priority: -1 }, function (ownerProps) { return h(FleetWorkspaceBrowser, ownerProps); });
 		});
 		ctx.slots.inject("settings.section", function () {
 			var off = ctx.slots.register({
