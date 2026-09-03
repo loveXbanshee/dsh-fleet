@@ -851,6 +851,27 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 	/* ---------------- always-on running/completed monitor (+ sound) ---------------- */
 	var monitorPrev = {};      // scopeKey -> { busy:boolean, finishedAt:number, idleStreak:number, lastBusyAt:number }
 	var liveCapable = {};      // scopeKey -> true once /live has ever answered (per page session)
+	var dockFrameEls = {};     // origin -> <iframe> DOM node (keep-alive pool), for focus routing
+	var dockFrameRefs = {};   // origin -> stable ref callback (avoids churn on every render)
+	function getDockFrameRef(origin) {
+		if (!dockFrameRefs[origin]) {
+			dockFrameRefs[origin] = function (el) {
+				if (el) dockFrameEls[origin] = el;
+				else delete dockFrameEls[origin];
+			};
+		}
+		return dockFrameRefs[origin];
+	}
+	/** Focus the live remote iframe so keyboard flows to the viewed machine only. */
+	function focusDockFrame(origin) {
+		var el = origin && dockFrameEls[origin];
+		if (!el || typeof el.focus !== "function") return;
+		try {
+			if (el.contentWindow && typeof el.contentWindow.focus === "function") el.contentWindow.focus();
+		}
+		catch (e) { /* cross-origin focus call is allowed; ignore */ }
+		try { el.focus({ preventScroll: true }); } catch (e2) { try { el.focus(); } catch (e3) { /* ignore */ } }
+	}
 	var dockFreshCache = {};   // scopeKey -> { newest, at } for old-remote fallback
 	var dockFreshFallback = {}; // scopeKey -> last fallback attempt ts
 	var remoteFreshCooldown = {}; // scopeKey -> ms until next direct /fresh retry
@@ -1037,8 +1058,21 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 		var openState = React.useState(true);
 		var dockOpen = openState[0];
 		var setDockOpen = openState[1];
-		var DOCK_W = 260;
-		var dockWidth = dockOpen ? DOCK_W : 44;
+		var DOCK_W_MIN = 150;
+		var DOCK_W_MAX = 720;
+		var DOCK_W_DEFAULT = 230;
+		var dockWLoaded = DOCK_W_DEFAULT;
+		try {
+			var dockStored = Number(window.localStorage.getItem("dsh-fleet.dockW.v1"));
+			if (Number.isFinite(dockStored) && dockStored >= DOCK_W_MIN && dockStored <= DOCK_W_MAX) dockWLoaded = dockStored;
+		}
+		catch (e) { /* ignore */ }
+		var dockWState = React.useState(dockWLoaded);
+		var dockW = dockWState[0];
+		var setDockW = dockWState[1];
+		function persistDockW(w) {
+			try { window.localStorage.setItem("dsh-fleet.dockW.v1", String(Math.max(DOCK_W_MIN, Math.min(DOCK_W_MAX, w)))); } catch (e) { /* ignore */ }
+		}
 		var viewportState = React.useState({ w: 1280, h: 800 });
 		var viewport = viewportState[0];
 		var setViewport = viewportState[1];
@@ -1238,6 +1272,81 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 			// eslint-disable-next-line react-hooks/exhaustive-deps
 		}, [activeOriginNow]);
 
+		/* Keyboard isolation: while a remote device view is open, keyboard events
+		   must only reach that machine's iframe — never the local DSH underneath
+		   (an Enter meant for the remote used to send/stop the local agent too).
+		   Our own dock controls stay operable (buttons, volume slider). */
+		React.useEffect(function () {
+			if (!(showRemote && activeOriginNow)) return;
+			var frameOrigin = activeOriginNow;
+			function guardKey(ev) {
+				var t = ev.target;
+				var inDock = t && t.nodeType === 1 && t.closest && t.closest("[data-hw-dock]");
+				if (inDock) return; // dock UI keeps its own keyboard (space/enter/arrows)
+				if (ev.ctrlKey || ev.metaKey || ev.altKey) return; // keep browser/OS combos
+				ev.preventDefault();
+				ev.stopPropagation();
+				focusDockFrame(frameOrigin);
+			}
+			function guardMouse(ev) {
+				var t = ev.target;
+				var inDock = t && t.nodeType === 1 && t.closest && t.closest("[data-hw-dock]");
+				if (inDock) return;
+				// Clicking anywhere on the local page (only the dock is visible beside
+				// the remote) must not hand focus to a hidden local input: keep it remote.
+				var tag = t && t.tagName;
+				if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") {
+					ev.preventDefault();
+					ev.stopPropagation();
+				}
+				focusDockFrame(frameOrigin);
+			}
+			window.addEventListener("keydown", guardKey, true);
+			window.addEventListener("keyup", guardKey, true);
+			window.addEventListener("mousedown", guardMouse, true);
+			// Drop focus from any lingering local composer so it can never swallow keys.
+			try {
+				var ae = document.activeElement;
+				if (ae && ae.blur && !(ae.closest && ae.closest("[data-hw-dock]"))) ae.blur();
+			}
+			catch (e) { /* ignore */ }
+			var t1 = setTimeout(function () { focusDockFrame(frameOrigin); }, 30);
+			var t2 = setTimeout(function () { focusDockFrame(frameOrigin); }, 250);
+			return function () {
+				window.removeEventListener("keydown", guardKey, true);
+				window.removeEventListener("keyup", guardKey, true);
+				window.removeEventListener("mousedown", guardMouse, true);
+				clearTimeout(t1);
+				clearTimeout(t2);
+			};
+		}, [showRemote, activeOriginNow]);
+
+		/* Drag the dock's left grip to resize; the chosen width is persisted. */
+		function startDockResize(e) {
+			if (!e || e.button !== 0) return;
+			e.preventDefault();
+			e.stopPropagation();
+			var startX = e.clientX;
+			var startW = dockW;
+			var finalW = dockW;
+			function onMove(ev) {
+				var w = startW + (startX - ev.clientX);
+				finalW = Math.max(DOCK_W_MIN, Math.min(DOCK_W_MAX, w));
+				setDockW(finalW);
+			}
+			function onUp() {
+				window.removeEventListener("mousemove", onMove);
+				window.removeEventListener("mouseup", onUp);
+				document.body.style.cursor = "";
+				document.body.style.userSelect = "";
+				persistDockW(finalW);
+			}
+			document.body.style.cursor = "col-resize";
+			document.body.style.userSelect = "none";
+			window.addEventListener("mousemove", onMove);
+			window.addEventListener("mouseup", onUp);
+		}
+
 		function cardFor(entry) {
 			var s = statuses[entry.id] || { online: true, hasToken: true };
 			var isRemote = entry.id !== "local";
@@ -1278,13 +1387,15 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 			h("input", { type: "range", min: 5, max: 300, step: 5, value: volPct, style: { flex: "1", minWidth: 0 }, onChange: function (e) { var v = Number(e.target.value); setVolPct(v); setFleetVolume(v / 100); } }),
 			h("span", { style: { flex: "0 0 auto", opacity: 0.7 } }, "≤300%")) : null;
 
-		var body = h("div", { className: "hw-dock-body" },
-			volRow,
-			entries.map(cardFor),
-			h("div", { className: "hw-dock-empty", style: { fontSize: 11 } }, (!devices || devices.length === 0) ? "未配置远程设备(设置 → Harness Fleet 添加)" : "状态 4s 刷新 · 点卡片切换 · 完成响猫叫"));
+		var body = dockOpen
+			? h("div", { className: "hw-dock-body" },
+				volRow,
+				entries.map(cardFor),
+				h("div", { className: "hw-dock-empty", style: { fontSize: 11 } }, (!devices || devices.length === 0) ? "未配置远程设备(设置 → Harness Fleet 添加)" : "状态 4s 刷新 · 点卡片切换 · 完成响猫叫"))
+			: null;
 
 		/* Numeric pixel sizing (immune to CSS stretch quirks for replaced iframes). */
-		var barW = dockOpen ? DOCK_W : 44;
+		var barW = dockOpen ? dockW : 44;
 		var frameW = Math.max(0, viewport.w - barW - 1);
 		var dockStyle = { position: "fixed", top: "0px", right: "0px", width: barW + "px", height: viewport.h + "px", pointerEvents: "auto", background: "#101318", color: "#e7e7ea", borderLeft: "1px solid rgba(255,255,255,.1)", display: "flex", flexDirection: "column", boxSizing: "border-box" };
 		/* Frame pool: opened remote dsh stay mounted (hidden when not active).
@@ -1299,9 +1410,25 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 			var style = isActive
 				? { position: "fixed", top: "0px", left: "0px", width: frameW + "px", height: viewport.h + "px", border: "0", background: "#fff", display: "block", pointerEvents: "auto", zIndex: 1 }
 				: { position: "fixed", top: "0px", left: "0px", width: "1px", height: "1px", border: "0", display: "none", pointerEvents: "none", zIndex: -1, visibility: "hidden" };
-			return h("iframe", { key: frame.origin, src: frame.origin, style: style, title: frame.name || "remote dsh", allow: "clipboard-read; clipboard-write; fullscreen" });
+			return h("iframe", {
+				key: frame.origin,
+				src: frame.origin,
+				style: style,
+				title: frame.name || "remote dsh",
+				allow: "clipboard-read; clipboard-write; fullscreen",
+				ref: getDockFrameRef(frame.origin),
+				onLoad: function () { if (frame.origin === activeOrigin) focusDockFrame(frame.origin); },
+			});
 		});
-		return h("div", null, h("style", null, CSS), frameNodes, h("div", { style: dockStyle }, head, body));
+		/* Resize grip on the dock's left edge: drag to change width (persisted). */
+		var grip = dockOpen
+			? h("div", {
+				title: "拖动调整栏宽",
+				onMouseDown: startDockResize,
+				style: { position: "absolute", left: "-5px", top: "0px", bottom: "0px", width: "9px", cursor: "col-resize", zIndex: 3 },
+			})
+			: null;
+		return h("div", null, h("style", null, CSS), frameNodes, h("div", { "data-hw-dock": "1", style: dockStyle }, grip, head, body));
 	}
 
 	function apply(ctx) {
