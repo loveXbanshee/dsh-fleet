@@ -300,6 +300,23 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 		var serveTokenDraft = serveTokenState[0];
 		var setServeTokenDraft = serveTokenState[1];
 
+		/* ---- fleet gateway settings (drafts; live status comes from data.gateway) ---- */
+		var gwEnableState = React.useState(false);
+		var gwEnable = gwEnableState[0];
+		var setGwEnable = gwEnableState[1];
+		var gwPortState = React.useState("");
+		var gwPort = gwPortState[0];
+		var setGwPort = gwPortState[1];
+		var gwHostState = React.useState("");
+		var gwHost = gwHostState[0];
+		var setGwHost = gwHostState[1];
+		React.useEffect(function () {
+			if (!data || !data.gateway) return;
+			setGwEnable(!!data.gateway.configured);
+			setGwPort(String(data.gateway.port));
+			setGwHost(String(data.gateway.host));
+		}, [data && data.gateway ? data.gateway.port : 0, data && data.gateway ? data.gateway.host : "", data && data.gateway ? data.gateway.configured : false]);
+
 		function submitRemote(event) {
 			event.preventDefault();
 			if (!addOrigin.trim()) { setError("请输入远程地址"); return; }
@@ -368,7 +385,8 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 
 		/* ---- remote cards + session panels ---- */
 		var remoteCards = remote.map(function (item) {
-			var stateKey = item.online && item.dsh ? "up" : item.online ? "other" : "down";
+			var okOnline = item.online && (item.dsh || item.gateway);
+			var stateKey = okOnline ? "up" : item.online ? "other" : "down";
 			var target = { kind: "remote", id: item.id };
 			var sessKey = targetKey(target);
 			var sess = sessions[sessKey] || {};
@@ -377,14 +395,15 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 					dot(stateKey),
 					h("div", { className: "hw-main" },
 						h("div", { className: "hw-title" }, item.name,
+							item.gateway ? h("span", { className: "hw-badge hw-badge-self" }, "Fleet 网关") : null,
 							item.hasToken ? h("span", { className: "hw-badge" }, "会话令牌已配置") : h("span", { className: "hw-badge" }, "未配令牌"),
 							item.rev ? h("span", { className: "hw-meta" }, "rev " + item.rev.slice(0, 8)) : null,
 							item.online ? h("span", { className: "hw-meta" }, item.ms + " ms") : null),
 						h("div", { className: "hw-sub" },
 							item.origin,
-							!item.online ? " · 不可达(确认该地址在远端可达、远端 dsh 已 --host 绑定局域网IP/隧道,且不要用 127.0.0.1)" : item.dsh ? "" : " · 非 Harness 页面")),
+							item.online ? (item.dsh ? "" : item.gateway ? " · Fleet 网关(会话可读)" : " · 非 Harness 页面") : (" · 不可达" + (item.error && item.error !== "unreachable" ? " (" + item.error + ")" : "") + " — 请在目标设备开启 Fleet 网关,或让 dsh 绑定局域网IP/隧道;地址不要用 127.0.0.1"))),
 					h("div", { className: "hw-actions" },
-						btn("会话", function () { loadSessions(target, false); }, { title: "读取该设备上的会话记录(需要它在同一插件里配置 serveToken)" }, !item.online || !item.hasToken),
+						btn("会话", function () { loadSessions(target, false); }, { title: "读取该设备上的会话记录(需要它在同一插件里配置 serveToken)" }, !okOnline || !item.hasToken),
 						btn("打开", function () { openOrigin(item.origin); }, null, !item.online),
 						btn("复制", function () { copyText(item.origin); }),
 						btn("移除", function () {
@@ -396,7 +415,7 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 		return h("div", { className: "hw" },
 			h("style", null, CSS),
 			h("div", { className: "hw-head" },
-				h("div", { className: "hw-title hw-big" }, "Harness Fleet", h("span", { className: "hw-meta" }, "Orchard · v" + (data.version || "?")), h("span", { className: "hw-meta" }, "by " + BRAND)),
+				h("div", { className: "hw-title hw-big" }, "Harness Fleet", h("span", { className: "hw-meta" }, "Fleet · v" + (data.version || "?")), h("span", { className: "hw-meta" }, "by " + BRAND)),
 				h("div", { className: "hw-actions" },
 					btn(busy ? "刷新中…" : "刷新", function () { refresh(false); }, null, busy),
 					btn("重新扫描", function () { refresh(true); }, null, busy))),
@@ -430,6 +449,22 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 				btn("保存令牌", function () { runAction("set-serve-token", { token: serveTokenDraft.trim() }); }, null, busy)),
 			h("div", { className: "hw-hint" },
 				"其他设备装好本插件后:在它们的远程列表用同一令牌添加本机地址,即可读取本机历史会话;令牌请放可信网络(Tailscale/https)内传输。"),
+
+			h("div", { className: "hw-section" }, "Fleet 网关(局域网直读会话)"),
+			h("div", { className: "hw-row hw-cmdrow" },
+				h("label", { className: "hw-row", style: { gap: "6px", flex: "0 1 auto", margin: 0 } },
+					h("input", { type: "checkbox", checked: gwEnable, onChange: function (e) { setGwEnable(e.target.checked); } }),
+					h("span", null, "启用只读网关(默认关闭)")),
+				h("span", { className: "hw-hint" }, "端口"),
+				h("input", { className: "hw-input", style: { flex: "0 1 90px" }, value: gwPort, placeholder: "33180", onChange: function (e) { setGwPort(e.target.value); } }),
+				h("span", { className: "hw-hint" }, "绑定"),
+				h("input", { className: "hw-input", style: { flex: "0 1 130px" }, value: gwHost, placeholder: "0.0.0.0", onChange: function (e) { setGwHost(e.target.value); } }),
+				btn("保存网关设置", function () {
+					runAction("set-gateway", { enabled: gwEnable, port: Number(gwPort) || undefined, host: gwHost.trim() || "0.0.0.0" });
+				}, null, busy)),
+			h("div", { className: "hw-hint" },
+				((data.gateway && data.gateway.listening) ? ("● 监听中 " + data.gateway.host + ":" + data.gateway.port) : (data.gateway && data.gateway.configured) ? ("未监听" + (data.gateway.error ? "(" + data.gateway.error + ")" : (data.serveSessions ? "" : " — 请先在上方设置共享令牌")) + " — 检查端口占用/防火墙") : "未启用"),
+				" · 网关只暴露「会话索引/全文」两个端点并强制要求 serveToken,无任何修改操作;启用后其他机器用「本机局域网IP:该端口」作为远程地址即可读取(免绑 dsh、免命令行)。Windows 首次需在防火墙弹窗点「允许访问」。" + (data.gateway && data.gateway.configured && !data.gateway.listening ? " 若提示端口占用可换端口保存。" : "")),
 
 			h("div", { className: "hw-foot" },
 				"dsh-fleet " + BRAND + " · 「本机会话」= 读取当前 DSH_HOME 的会话日志。跨设备继续旧对话:打开远端 Web 界面进入原会话即可续聊(记录不会重开),或把会话复制为 Markdown 到本地新会话。"));

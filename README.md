@@ -74,10 +74,27 @@ dsh plugin --profile web add github:loveXbanshee/dsh-fleet
 3. 点该远程卡片的「会话」→ 列出对方全部会话(可"加载全部标题"),展开读全文 /
    复制 Markdown / 在对方 Web UI 里继续该会话。
 
+### 不用绑 IP、不用命令行:Fleet 网关(v0.5)
+dsh 出于安全默认只监听 127.0.0.1,其它机器连不到。**Fleet 网关**让插件自己开一个
+**只读**监听端口解决跨机读取,完全在界面里完成:
+
+1. 在**目标设备**的 Fleet 设置里:先设一个共享令牌,再在「Fleet 网关」区块
+   勾选启用 → 保存。状态出现 "● 监听中 host:port"(默认 0.0.0.0:33180,可改)。
+   Windows 首次会弹防火墙提示,点**允许访问**即可(或预先放行该端口)。
+2. 在**本机(指挥台)**把该设备添加为远程:地址填 `http://<该设备局域网IP>:<网关端口>`
+   (默认 `:33180`),会话令牌填同一个 → 卡片显示绿色 **"Fleet 网关"** 徽标。
+3. 之后「会话」浏览/读全文与普通远程完全一致。
+
+网关只暴露「会话索引 / 会话全文」两个端点,每次都要求 serveToken;**没有任何
+修改类操作**,也不转发其它流量;默认关闭,需显式启用。
+
 ## 安全模型
 - 变更类接口:仅**同源 + 回环** POST;本机会话内容接口仅回环;
-- 对外服务接口(`/api/sessions`、`/api/session-content`)必须携带匹配
-  `serveToken` 的令牌,否则 403;未设置令牌时默认关闭;
+- 对外服务接口(`/api/sessions`、`/api/session-content`)——包括主 web 与
+  Fleet 网关两条通道——必须携带匹配 `serveToken` 的令牌,否则 403;未设置令牌
+  时默认关闭;
+- Fleet 网关:独立监听端口(默认 0.0.0.0:33180,可改绑定),只读两个会话端点,
+  强制令牌;默认关闭;
 - 远程令牌只存宿主配置、响应不回传;内容按量截断并给出"过长已截断"标记。
 
 ## API(宿主注册,前缀 `/dsh-fleet/api`)
@@ -90,17 +107,22 @@ dsh plugin --profile web add github:loveXbanshee/dsh-fleet
 | `/stop-local` `/start-local` | POST | `{ port }`(start 可带 `startCommand`) |
 | `/set-start-command` | POST | `{ port, command }` |
 | `/set-serve-token` | POST | `{ token }`(留空=关闭) |
+| `/set-gateway` | POST | `{ enabled, port?, host? }`(Fleet 网关,环回) |
 | `/local-sessions` `/local-session-content` | GET | 本机会话索引(`includeTitles=1`)/全文 `?id=` |
 | `/remote-sessions` `/remote-session-content` | GET | 代理远程(本机用) |
 | `/sessions` `/session-content` | GET | **对外服务**(需 `?token=`) |
+
+网关开启后,`/`、`/health`、`/dsh-fleet/api/sessions`、`/dsh-fleet/api/session-content`
+也会在网关端口(默认 33180)对外提供,其中两个会话端点同样要求 `?token=`。
 
 ## 配置示例(`~/.dsh/dsh-fleet.json`)
 ```json
 {
   "range": { "start": 3080, "end": 3129 },
   "serveToken": "在此设置共享令牌,留空=禁止外部读取",
+  "gateway": { "enabled": true, "host": "0.0.0.0", "port": 33180 },
   "remotes": [
-    { "id": "r_abc123", "name": "办公室服务器", "origin": "http://192.168.1.20:3080", "token": "与对方 serveToken 相同" }
+    { "id": "r_abc123", "name": "办公室服务器", "origin": "http://192.168.1.20:33180", "token": "与对方 serveToken 相同" }
   ],
   "startCommands": { "3081": "dsh --profile workbench1 web" }
 }
