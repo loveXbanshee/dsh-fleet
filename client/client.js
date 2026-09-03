@@ -736,7 +736,21 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 		".hw-mon-ok{color:#22c55e;font-weight:700;font-size:13px;line-height:1}",
 		".hw-mon-name{white-space:nowrap;max-width:160px;overflow:hidden;text-overflow:ellipsis}",
 		".hw-spin{width:12px;height:12px;border-radius:50%;border:2px solid rgba(255,255,255,.22);border-top-color:#22c55e;display:inline-block;flex:0 0 auto;animation:hwRotate .8s linear infinite}",
-		"@keyframes hwRotate{to{transform:rotate(360deg)}}"
+		"@keyframes hwRotate{to{transform:rotate(360deg)}}",
+		".hw-dock{position:fixed;top:0;bottom:0;right:0;z-index:2147483600;background:#101318;color:#e7e7ea;display:flex;flex-direction:column;border-left:1px solid rgba(255,255,255,.1)}",
+		".hw-dock-head{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:8px 10px;border-bottom:1px solid rgba(255,255,255,.08);font-weight:600;font-size:13px}",
+		".hw-dock-toggle{border:1px solid rgba(255,255,255,.2);background:transparent;color:inherit;border-radius:6px;padding:2px 8px;cursor:pointer;font-size:11px}",
+		".hw-dock-body{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:8px;padding:8px}",
+		".hw-card{border:1px solid rgba(255,255,255,.14);border-radius:10px;background:rgba(255,255,255,.03);padding:8px 10px;cursor:pointer;text-align:left;color:inherit;display:flex;flex-direction:column;gap:4px;width:100%}",
+		".hw-card:hover{background:rgba(255,255,255,.07)}",
+		".hw-card-active{border-color:#2563eb;box-shadow:0 0 0 1px #2563eb inset}",
+		".hw-card-row{display:flex;align-items:center;gap:8px;min-width:0}",
+		".hw-card-name{font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+		".hw-card-sub{font-size:11px;opacity:.65;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+		".hw-card-status{font-size:11px;margin-left:auto;flex:0 0 auto;color:#22c55e}",
+		".hw-card-status.busy{color:#22c55e}",
+		".hw-dock-empty{padding:14px 8px;font-size:12px;opacity:.6;text-align:center}",
+		".hw-device-layer{position:fixed;top:0;bottom:0;left:0;z-index:2147483400;background:#0f1115;display:flex;flex-direction:column}"
 	].join("\n");
 
 	/* ---------------- cross-component fleet store ---------------- */
@@ -942,6 +956,118 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 			}));
 	}
 
+	/* ---------------- right-side device dock: cards with status + switch ---------------- */
+	function FleetDock() {
+		var store = useFleetStore();
+		var devicesState = React.useState(null);
+		var devices = devicesState[0];
+		var setDevices = devicesState[1];
+		var statusState = React.useState({});
+		var statuses = statusState[0];
+		var setStatuses = statusState[1];
+		var openState = React.useState(true);
+		var dockOpen = openState[0];
+		var setDockOpen = openState[1];
+		var dockWidth = dockOpen ? 320 : 44;
+
+		React.useEffect(function () {
+			var unlock = function () { audioUnlocked = true; try { if (audioCtx && audioCtx.state === "suspended") audioCtx.resume(); } catch (e) { /* ignore */ } };
+			window.addEventListener("pointerdown", unlock, { once: true });
+			window.addEventListener("keydown", unlock, { once: true });
+			var alive = true;
+			var timer = null;
+			async function tick() {
+				var remoteList = null;
+				try {
+					var st = await get("state");
+					remoteList = st.remote || [];
+					setDevices(remoteList);
+				}
+				catch (e) { /* keep */ }
+				var fetchFresh = function (kind, remote) {
+					var url = kind === "local" ? "local-fresh" : "remote-fresh?remote=" + encodeURIComponent(remote.id);
+					return get(url).then(function (payload) {
+						return { id: kind === "local" ? "local" : remote.id, name: kind === "local" ? "本机" : (remote.name || remote.origin), origin: kind === "local" ? null : remote.origin, online: kind === "local" ? true : remote.online, newest: payload.newestLocal || 0, err: null };
+					}).catch(function (e2) {
+						return { id: kind === "local" ? "local" : remote.id, name: kind === "local" ? "本机" : (remote.name || remote.origin), origin: kind === "local" ? null : remote.origin, online: kind === "local" ? true : false, newest: 0, err: String((e2 && e2.message) || e2) };
+					});
+				};
+				var probes = [fetchFresh("local", null)];
+				if (remoteList) remoteList.forEach(function (remote) { probes.push(fetchFresh("remote", remote)); });
+				return Promise.all(probes).then(function (results) {
+					if (!alive) return;
+					var next = {};
+					var chime = false;
+					results.forEach(function (probe) {
+						var prev = monitorPrev[probe.id];
+						var busy = probe.err == null && probe.online && probe.newest > 0 && (Date.now() - probe.newest) < 45000;
+						if (prev && prev.busy && !busy) {
+							prev.finishedAt = Date.now();
+							chime = true;
+						}
+						var finishedRecent = !!prev && !!prev.finishedAt && (Date.now() - prev.finishedAt) < 8000;
+						monitorPrev[probe.id] = prev ? { busy: busy, finishedAt: prev.finishedAt || 0 } : { busy: busy, finishedAt: 0 };
+						next[probe.id] = { busy: busy, finished: finishedRecent, offline: probe.err != null || !probe.online, name: probe.name, origin: probe.origin, newest: probe.newest, err: probe.err };
+					});
+					setStatuses(next);
+					if (chime) playChime();
+				}).catch(function () { /* ignore */ });
+			}
+			tick();
+			timer = setInterval(tick, 4000);
+			return function () {
+				alive = false;
+				if (timer) clearInterval(timer);
+				window.removeEventListener("pointerdown", unlock);
+				window.removeEventListener("keydown", unlock);
+			};
+		}, []);
+
+		var showRemote = store.open && !!store.device;
+		var activeDevice = store.device;
+
+		function cardFor(entry) {
+			var status = statuses[entry.id] || {};
+			var busy = !!status.busy;
+			var finished = !!status.finished;
+			var offline = !!status.offline;
+			var active = entry.id === "local" ? !showRemote : (showRemote && activeDevice && activeDevice.id === entry.id);
+			var indicator = busy ? h("span", { className: "hw-spin" }) : finished ? h("span", { style: { color: "#22c55e", fontWeight: 700 } }, "✓") : h("span", { style: { background: offline ? "#9ca3af" : "#22c55e" }, className: "hw-mon-dot" });
+			var statusText = busy ? "运行中" : finished ? "刚完成" : offline ? "离线" : "空闲";
+			var sub = entry.id === "local" ? "本机 DeepSeek Harness" : (entry.origin || "");
+			return h("button", { key: entry.id, className: "hw-card" + (active ? " hw-card-active" : ""), onClick: function () {
+				if (entry.id === "local") { fleetStore.open = false; fleetStore.device = null; fleetNotify(); }
+				else { fleetOpenDevice({ id: entry.id, name: entry.name, origin: entry.origin }); }
+			} },
+				h("div", { className: "hw-card-row" }, indicator, h("span", { className: "hw-card-name" }, entry.name || entry.id)),
+				h("div", { className: "hw-card-sub" }, sub),
+				h("div", { className: "hw-card-row" },
+					h("span", { className: "hw-card-sub" }, status.newest ? ("活跃 " + fmtTime(status.newest).slice(5, 16)) : ""),
+					h("span", { className: "hw-card-status" + (busy ? " busy" : "") }, statusText)));
+		}
+
+		var dockStyle = { width: dockWidth + "px" };
+		var head = dockOpen
+			? h("div", { className: "hw-dock-head" }, "设备", h("button", { className: "hw-dock-toggle", onClick: function () { setDockOpen(false); } }, "»"))
+			: h("div", { className: "hw-dock-head", style: { padding: "8px 0", justifyContent: "center" } }, h("button", { className: "hw-dock-toggle", title: "展开设备栏", onClick: function () { setDockOpen(true); } }, "«"));
+
+		var entries = [{ id: "local", name: "本机" }];
+		if (devices) devices.forEach(function (device) { entries.push({ id: device.id, name: device.name || device.origin, origin: device.origin }); });
+
+		var body = dockOpen
+			? h("div", { className: "hw-dock-body" }, entries.map(cardFor),
+				h("div", { className: "hw-dock-empty", style: { fontSize: 11 } }, "提示音/状态每 4s 刷新;点卡片切换;完成会响提示音"))
+			: null;
+
+		var layer = null;
+		if (showRemote && activeDevice) {
+			layer = h("iframe", { key: activeDevice.origin, src: activeDevice.origin, className: "hw-device-layer", style: { right: dockWidth + "px" }, title: activeDevice.name || "remote dsh" });
+		}
+		return h("div", null, h("style", null, CSS),
+			layer,
+			h("div", { className: "hw-dock", style: dockStyle }, head, body));
+	}
+
 	function apply(ctx) {
 		ctx.slots.inject("settings.section", function () {
 			var off = ctx.slots.register({
@@ -955,18 +1081,10 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 		ctx.slots.inject("shell.overlay", function () {
 			return ctx.slots.register({
 				name: "shell.overlay",
-				id: "fleet-monitor",
-				order: 6,
-				label: function () { return "Fleet 运行监测"; },
-			}, function () { return h(FleetMonitor, {}); });
-		});
-		ctx.slots.inject("shell.overlay", function () {
-			return ctx.slots.register({
-				name: "shell.overlay",
-				id: "fleet-remote-view",
+				id: "fleet-dock",
 				order: 5,
-				label: function () { return "Fleet 远程 dsh"; },
-			}, function () { return h(FleetOverlay, {}); });
+				label: function () { return "Fleet 设备栏"; },
+			}, function () { return h(FleetDock, {}); });
 		});
 	}
 
