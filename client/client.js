@@ -830,6 +830,7 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 	var monitorPrev = {};      // scopeKey -> { busy:boolean, finishedAt:number }
 	var dockFreshCache = {};   // scopeKey -> { newest, at } for old-remote fallback
 	var dockFreshFallback = {}; // scopeKey -> last fallback attempt ts
+	var remoteFreshCooldown = {}; // scopeKey -> ms until next direct /fresh retry
 	var audioCtx = null;
 	var audioUnlocked = false;
 	var lastChimeAt = 0;
@@ -855,20 +856,29 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 		lastChimeAt = now;
 		var fire = function () {
 			try {
-				var notes = [880, 1318.5];
-				notes.forEach(function (freq, index) {
-					var osc = ctx.createOscillator();
-					var gain = ctx.createGain();
-					osc.type = "sine";
-					osc.frequency.value = freq;
-					var t0 = ctx.currentTime + index * 0.12;
-					gain.gain.setValueAtTime(0.0001, t0);
-					gain.gain.exponentialRampToValueAtTime(0.12, t0 + 0.02);
-					gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.35);
-					osc.connect(gain).connect(ctx.destination);
-					osc.start(t0);
-					osc.stop(t0 + 0.4);
-				});
+				// A small synthesized "meow": rising then falling pitch with vibrato.
+				var t0 = ctx.currentTime;
+				var osc = ctx.createOscillator();
+				osc.type = "sine";
+				osc.frequency.setValueAtTime(520, t0);
+				osc.frequency.linearRampToValueAtTime(940, t0 + 0.15);
+				osc.frequency.linearRampToValueAtTime(430, t0 + 0.55);
+				var gain = ctx.createGain();
+				gain.gain.setValueAtTime(0.0001, t0);
+				gain.gain.exponentialRampToValueAtTime(0.42, t0 + 0.06);
+				gain.gain.exponentialRampToValueAtTime(0.35, t0 + 0.3);
+				gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.95);
+				var lfo = ctx.createOscillator();
+				lfo.type = "sine";
+				lfo.frequency.value = 26;
+				var lfoGain = ctx.createGain();
+				lfoGain.gain.value = 30;
+				lfo.connect(lfoGain).connect(osc.frequency);
+				osc.connect(gain).connect(ctx.destination);
+				osc.start(t0);
+				lfo.start(t0);
+				osc.stop(t0 + 1.0);
+				lfo.stop(t0 + 1.0);
 			}
 			catch (e) { /* ignore */ }
 		};
@@ -1010,10 +1020,22 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 				}));
 				if (remoteList) {
 					remoteList.forEach(function (remote) {
+						if (remoteFreshCooldown[remote.id] && Date.now() < remoteFreshCooldown[remote.id]) {
+							// Backed off after a recent failure: reuse cache or mark briefly.
+							var cachedR = dockFreshCache[remote.id];
+							if (cachedR && Date.now() - cachedR.at < 120000) {
+								probes.push(Promise.resolve({ id: remote.id, name: remote.name || remote.origin, online: remote.online, hasToken: !!remote.hasToken, newest: cachedR.newest, err: null }));
+							}
+							else {
+								probes.push(Promise.resolve({ id: remote.id, name: remote.name || remote.origin, online: remote.online, hasToken: !!remote.hasToken, newest: 0, err: "重试冷却中" }));
+							}
+							return;
+						}
 						probes.push(get("remote-fresh?remote=" + encodeURIComponent(remote.id)).then(function (p) {
 							dockFreshCache[remote.id] = { newest: p.newestLocal || 0, at: Date.now() };
 							return { id: remote.id, name: remote.name || remote.origin, online: remote.online, hasToken: !!remote.hasToken, newest: p.newestLocal || 0, err: null };
 						}).catch(function () {
+							remoteFreshCooldown[remote.id] = Date.now() + 30000;
 							var cached = dockFreshCache[remote.id];
 							var now = Date.now();
 							if (cached && now - cached.at < 120000) {
@@ -1155,7 +1177,7 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 				host.style.cssText = "position:fixed;inset:0;pointer-events:none;z-index:2147483300";
 				document.body.appendChild(host);
 				mounted.host = host;
-				var element = h(React.createElement(FleetDock, {}));
+				var element = React.createElement(FleetDock, {});
 				if (renderer.render) { renderer.render(element, host); mounted.root = renderer; }
 				else {
 					var rootHandle = renderer.createRoot(host);
