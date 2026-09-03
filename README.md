@@ -120,5 +120,11 @@ dsh plugin --profile web add github:loveXbanshee/dsh-fleet
 - 本机多开列表思路参考 [dsh-instance-manager](https://github.com/xswt442-cmd/dsh-instance-manager);
 - 跨实例协议(后续方向)参考 [dsh-interconnect](https://github.com/Chinesezjc/dsh-interconnect)。
 
+## 开发自检
+```sh
+npm run check                 # 语法自检 + BOM/JSON 校验(发版前跑)
+node scripts/check-files.mjs <路径或目录...>   # 也可对 profile 等外部目录做 BOM/JSON 扫描
+```
+
 ## License
 MIT · © 2026 Punica Studio

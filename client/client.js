@@ -382,7 +382,7 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 							item.online ? h("span", { className: "hw-meta" }, item.ms + " ms") : null),
 						h("div", { className: "hw-sub" },
 							item.origin,
-							!item.online ? " · 不可达" : item.dsh ? "" : " · 非 Harness 页面")),
+							!item.online ? " · 不可达(确认该地址在远端可达、远端 dsh 已 --host 绑定局域网IP/隧道,且不要用 127.0.0.1)" : item.dsh ? "" : " · 非 Harness 页面")),
 					h("div", { className: "hw-actions" },
 						btn("会话", function () { loadSessions(target, false); }, { title: "读取该设备上的会话记录(需要它在同一插件里配置 serveToken)" }, !item.online || !item.hasToken),
 						btn("打开", function () { openOrigin(item.origin); }, null, !item.online),
