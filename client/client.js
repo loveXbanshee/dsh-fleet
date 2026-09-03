@@ -1013,45 +1013,52 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 				}
 				catch (e) { /* keep */ }
 				var probes = [];
-				probes.push(get("local-fresh").then(function (p) {
-					return { id: "local", name: "本机", online: true, hasToken: true, newest: p.newestLocal || 0, err: null };
-				}).catch(function (e2) {
-					return { id: "local", name: "本机", online: true, hasToken: true, newest: 0, err: String((e2 && e2.message) || e2) };
+				// Local scope: authoritative /live first, freshness as fallback.
+				probes.push(get("local-live").then(function (p) {
+					return { id: "local", name: "本机", online: true, hasToken: true, newest: 0, err: null, hasLive: true, liveBusy: p.busy === true, liveLastBusyAt: p.lastBusyAt || 0 };
+				}).catch(function () {
+					return get("local-fresh").then(function (p) {
+						return { id: "local", name: "本机", online: true, hasToken: true, newest: p.newestLocal || 0, err: null, hasLive: false, liveBusy: false };
+					}).catch(function (e2) {
+						return { id: "local", name: "本机", online: true, hasToken: true, newest: 0, err: String((e2 && e2.message) || e2), hasLive: false, liveBusy: false };
+					});
 				}));
 				if (remoteList) {
 					remoteList.forEach(function (remote) {
-						if (remoteFreshCooldown[remote.id] && Date.now() < remoteFreshCooldown[remote.id]) {
-							// Backed off after a recent failure: reuse cache or mark briefly.
-							var cachedR = dockFreshCache[remote.id];
-							if (cachedR && Date.now() - cachedR.at < 120000) {
-								probes.push(Promise.resolve({ id: remote.id, name: remote.name || remote.origin, online: remote.online, hasToken: !!remote.hasToken, newest: cachedR.newest, err: null }));
-							}
-							else {
-								probes.push(Promise.resolve({ id: remote.id, name: remote.name || remote.origin, online: remote.online, hasToken: !!remote.hasToken, newest: 0, err: "重试冷却中" }));
-							}
-							return;
-						}
-						probes.push(get("remote-fresh?remote=" + encodeURIComponent(remote.id)).then(function (p) {
-							dockFreshCache[remote.id] = { newest: p.newestLocal || 0, at: Date.now() };
-							return { id: remote.id, name: remote.name || remote.origin, online: remote.online, hasToken: !!remote.hasToken, newest: p.newestLocal || 0, err: null };
+						// Prefer authoritative /live on the remote; fall back to freshness for old remotes.
+						probes.push(get("remote-live?remote=" + encodeURIComponent(remote.id)).then(function (p) {
+							remoteFreshCooldown[remote.id] = 0;
+							return { id: remote.id, name: remote.name || remote.origin, online: remote.online, hasToken: !!remote.hasToken, newest: 0, err: null, hasLive: true, liveBusy: p.busy === true, liveLastBusyAt: p.lastBusyAt || 0 };
 						}).catch(function () {
-							remoteFreshCooldown[remote.id] = Date.now() + 30000;
-							var cached = dockFreshCache[remote.id];
-							var now = Date.now();
-							if (cached && now - cached.at < 120000) {
-								return { id: remote.id, name: remote.name || remote.origin, online: remote.online, hasToken: !!remote.hasToken, newest: cached.newest, err: null };
+							if (remoteFreshCooldown[remote.id] && Date.now() < remoteFreshCooldown[remote.id]) {
+								var cachedR = dockFreshCache[remote.id];
+								if (cachedR && Date.now() - cachedR.at < 120000) {
+									return Promise.resolve({ id: remote.id, name: remote.name || remote.origin, online: remote.online, hasToken: !!remote.hasToken, newest: cachedR.newest, err: null, hasLive: false, liveBusy: false });
+								}
+								return Promise.resolve({ id: remote.id, name: remote.name || remote.origin, online: remote.online, hasToken: !!remote.hasToken, newest: 0, err: "重试冷却中", hasLive: false, liveBusy: false });
 							}
-							if (now - (dockFreshFallback[remote.id] || 0) < 20000) {
-								return { id: remote.id, name: remote.name || remote.origin, online: remote.online, hasToken: !!remote.hasToken, newest: 0, err: "读取失败(重试间隔中)" };
-							}
-							dockFreshFallback[remote.id] = now;
-							return get("remote-sessions?remote=" + encodeURIComponent(remote.id)).then(function (s) {
-								var newest = 0;
-								(s.sessions || []).forEach(function (x) { if ((x.fileModifiedMs || 0) > newest) newest = x.fileModifiedMs; });
-								dockFreshCache[remote.id] = { newest: newest, at: Date.now() };
-								return { id: remote.id, name: remote.name || remote.origin, online: remote.online, hasToken: !!remote.hasToken, newest: newest, err: null };
-							}).catch(function (e3) {
-								return { id: remote.id, name: remote.name || remote.origin, online: remote.online, hasToken: !!remote.hasToken, newest: 0, err: String((e3 && e3.message) || e3) + " — 远端需升级到 ≥0.10" };
+							return get("remote-fresh?remote=" + encodeURIComponent(remote.id)).then(function (p) {
+								dockFreshCache[remote.id] = { newest: p.newestLocal || 0, at: Date.now() };
+								return { id: remote.id, name: remote.name || remote.origin, online: remote.online, hasToken: !!remote.hasToken, newest: p.newestLocal || 0, err: null, hasLive: false, liveBusy: false };
+							}).catch(function () {
+								remoteFreshCooldown[remote.id] = Date.now() + 30000;
+								var cached = dockFreshCache[remote.id];
+								var now = Date.now();
+								if (cached && now - cached.at < 120000) {
+									return { id: remote.id, name: remote.name || remote.origin, online: remote.online, hasToken: !!remote.hasToken, newest: cached.newest, err: null, hasLive: false, liveBusy: false };
+								}
+								if (now - (dockFreshFallback[remote.id] || 0) < 20000) {
+									return { id: remote.id, name: remote.name || remote.origin, online: remote.online, hasToken: !!remote.hasToken, newest: 0, err: "读取失败(重试间隔中)", hasLive: false, liveBusy: false };
+								}
+								dockFreshFallback[remote.id] = now;
+								return get("remote-sessions?remote=" + encodeURIComponent(remote.id)).then(function (s) {
+									var newest = 0;
+									(s.sessions || []).forEach(function (x) { if ((x.fileModifiedMs || 0) > newest) newest = x.fileModifiedMs; });
+									dockFreshCache[remote.id] = { newest: newest, at: Date.now() };
+									return { id: remote.id, name: remote.name || remote.origin, online: remote.online, hasToken: !!remote.hasToken, newest: newest, err: null, hasLive: false, liveBusy: false };
+								}).catch(function (e3) {
+									return { id: remote.id, name: remote.name || remote.origin, online: remote.online, hasToken: !!remote.hasToken, newest: 0, err: String((e3 && e3.message) || e3) + " — 远端需升级到含 /live 的版本", hasLive: false, liveBusy: false };
+								});
 							});
 						}));
 					});
@@ -1062,12 +1069,14 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 					var chime = false;
 					results.forEach(function (r) {
 						var prev = monitorPrev[r.id];
-						var readOk = r.err == null && r.newest > 0;
-						var busy = r.online && readOk && (Date.now() - r.newest) < 60000;
+						var readOk = r.err == null;
+						var busy;
+						if (r.hasLive) busy = r.liveBusy === true;
+						else busy = r.online && readOk && r.newest > 0 && (Date.now() - r.newest) < 60000;
 						if (prev && prev.busy && !busy) { prev.finishedAt = Date.now(); chime = true; }
 						var finished = !!prev && !!prev.finishedAt && (Date.now() - prev.finishedAt) < 8000;
 						monitorPrev[r.id] = prev ? { busy: busy, finishedAt: prev.finishedAt || 0 } : { busy: busy, finishedAt: 0 };
-						next[r.id] = { busy: busy, finished: finished, online: r.online, hasToken: r.hasToken, readError: r.err, newest: r.newest, name: r.name };
+						next[r.id] = { busy: busy, finished: finished, online: r.online, hasToken: r.hasToken, readError: r.err, newest: r.hasLive ? r.liveLastBusyAt : r.newest, name: r.name };
 					});
 					setStatuses(next);
 					if (chime) { console.info("[dsh-fleet] completion detected -> chime"); playChime(); }
