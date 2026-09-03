@@ -724,7 +724,12 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 		".hw-sb-railbtn{border:1px solid rgba(128,128,128,.3);background:transparent;color:inherit;width:28px;height:28px;border-radius:8px;cursor:pointer;font-size:13px;display:flex;align-items:center;justify-content:center;padding:0}",
 		".hw-sb-railbtn:hover{background:rgba(128,128,128,.14)}",
 		".hw-sb-pulse{animation:hwPulse 1.2s ease-in-out infinite}",
-		".hw-sb-idle{animation:none}"
+		".hw-sb-idle{animation:none}",
+		".hw-tabs{position:fixed;top:0;left:0;right:0;height:34px;display:flex;align-items:center;gap:6px;padding:0 10px;background:rgba(15,17,21,.97);color:#e7e7ea;z-index:2147483500;border-bottom:1px solid rgba(255,255,255,.08);overflow-x:auto}",
+		".hw-tab{background:transparent;color:inherit;border:1px solid rgba(255,255,255,.16);border-radius:8px;padding:3px 12px;font-size:12px;cursor:pointer;white-space:nowrap;flex:0 0 auto}",
+		".hw-tab:hover{background:rgba(255,255,255,.08)}",
+		".hw-tab-active{background:#2563eb;border-color:#2563eb;color:#fff}",
+		".hw-remotehost{position:fixed;top:34px;left:0;right:0;bottom:0;z-index:2147483400;display:flex;flex-direction:column;background:#0f1115}"
 	].join("\n");
 
 	/* ---------------- cross-component fleet store ---------------- */
@@ -763,225 +768,44 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 			busy ? h("span", { className: "hw-chip-flag" }, "运行中") : (activity && activity.justFinished ? h("span", { className: "hw-chip-flag" }, "✓") : null));
 	}
 
-	/** Full-window in-app view: pick a remote device, then iframe its dsh UI. */
+	/** Top tabs: [本机 | each remote]. Remote tab = that device's dsh embedded
+	 *  below a slim top tab bar (single remote sidebar, no double sidebar);
+	 *  本机 = native DSH untouched (no sidebar replacement). */
 	function FleetOverlay() {
 		var store = useFleetStore();
 		var devicesState = React.useState(null);
 		var devices = devicesState[0];
 		var setDevices = devicesState[1];
-		var errState = React.useState("");
-		var err = errState[0];
-		var setErr = errState[1];
-		React.useEffect(function () {
-			if (!store.open) return;
-			var alive = true;
-			function load() {
-				get("state").then(function (payload) { if (alive) setDevices(payload.remote || []); })
-					.catch(function (error) { setErr(String((error && error.message) || error)); });
-			}
-			load();
-			var timer = setInterval(load, 10000);
-			return function () { alive = false; clearInterval(timer); };
-		}, [store.open]);
-		if (!store.open) return null;
-		var overlayStyle = store.mainLeft != null
-			? { left: store.mainLeft + "px", right: "0px", top: "0px", bottom: "0px" }
-			: null;
-		var bar = h("div", { className: "hw-overlay-bar" },
-			h("button", { className: "hw-btn", onClick: fleetClose }, "✕ 返回本机"),
-			h("span", { className: "hw-overlay-title" }, "远程 dsh(右侧内容区)"),
-			h("div", { className: "hw-chipbar hw-chipbar-inline" },
-				(devices || []).map(function (remote) {
-					return h(FleetChip, { key: remote.id, device: remote, activity: null, onClick: function () { fleetPickDevice({ id: remote.id, name: remote.name, origin: remote.origin }); } });
-				})));
-		var body;
-		if (store.device) {
-			body = h("iframe", { key: store.device.origin, src: store.device.origin, className: "hw-frame", title: (store.device.name || "remote dsh") });
-		}
-		else if (devices && devices.length > 0) {
-			body = h("div", { className: "hw-overlay-empty" }, "请在上方选择要打开的远程设备(点击即在本窗口打开,可继续对话)");
-		}
-		else {
-			body = h("div", { className: "hw-overlay-empty" }, err ? ("加载失败: " + err) : "暂无已配置的远程设备 — 请到 设置 → Harness Fleet 添加并配置令牌");
-		}
-		return h("div", { className: "hw-overlay", style: overlayStyle }, h("style", null, CSS), bar, body);
-	}
-
-	/* ---------------- composite sidebar: local workspaces + remote tree ---------------- */
-
-	function FleetWorkspaceBrowser(props) {
-		var wide = props && props.wide !== undefined ? props.wide : true;
-		var expandSidebar = props && props.expandSidebar ? props.expandSidebar : function () {};
-		var modelState = React.useState(null);
-		var model = modelState[0];
-		var setModel = modelState[1];
-		var openState = React.useState({});
-		var opened = openState[0];
-		var setOpened = openState[1];
-
-		/* Track this sidebar node's right edge so the remote pane only covers
-		   the main content area (left sidebar stays visible & clickable). */
-		var hostNodeState = React.useState(null);
-		var hostNode = hostNodeState[0];
-		var setHostNode = hostNodeState[1];
-		React.useEffect(function () {
-			if (!hostNode || !wide) return;
-			var measure = function () {
-				try {
-					var rect = hostNode.getBoundingClientRect();
-					var nextLeft = Math.max(0, Math.round(rect.right));
-					if (fleetStore.mainLeft !== nextLeft) {
-						fleetStore.mainLeft = nextLeft;
-						fleetNotify();
-					}
-				}
-				catch (e) { /* ignore */ }
-			};
-			measure();
-			window.addEventListener("resize", measure);
-			var observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(measure) : null;
-			if (observer) observer.observe(hostNode);
-			return function () {
-				window.removeEventListener("resize", measure);
-				if (observer) observer.disconnect();
-			};
-		}, [hostNode, wide]);
-
-		function toggleOpen(key) {
-			setOpened(function (prev) {
-				var next = Object.assign({}, prev);
-				next[key] = !prev[key];
-				return next;
-			});
-		}
-
 		React.useEffect(function () {
 			var alive = true;
 			var timer = null;
-			async function load() {
-				var localList = [];
-				try {
-					var page = await get("local-sessions?includeTitles=1");
-					var groups = new Map();
-					(page.sessions || []).forEach(function (s) {
-						var key = s.cwd || "(无目录)";
-						if (!groups.has(key)) groups.set(key, { cwd: key, sessions: [] });
-						groups.get(key).sessions.push(s);
-					});
-					localList = Array.from(groups.values()).map(function (g) {
-						var parts = String(g.cwd).replace(/\\/g, "/").split("/").filter(Boolean);
-						return { cwd: g.cwd, name: parts.length > 0 ? parts[parts.length - 1] : g.cwd, sessions: (g.sessions || []).sort(function (a, b) { return (b.fileModifiedMs || 0) - (a.fileModifiedMs || 0); }) };
-					}).sort(function (a, b) { return a.name.localeCompare(b.name); });
-				}
-				catch (e) { /* ignore */ }
-
-				var remoteRows = [];
-				try {
-					var st = await get("state");
-					var devices = st.remote || [];
-					var states = [];
-					for (var i = 0; i < devices.length; i += 1) {
-						var device = devices[i];
-						var sessions = [];
-						var busy = false;
-						var err = device.online ? undefined : (device.error || "offline");
-						if (device.online && device.hasToken) {
-							try {
-								var rs = await get("remote-sessions?remote=" + encodeURIComponent(device.id) + "&includeTitles=1");
-								sessions = rs.sessions || [];
-								var newest = 0;
-								sessions.forEach(function (s) { if ((s.fileModifiedMs || 0) > newest) newest = s.fileModifiedMs; });
-								busy = (Date.now() - newest) < 45000;
-							}
-							catch (e2) { err = String((e2 && e2.message) || e2); }
-						}
-						states.push({ id: device.id, name: device.name, origin: device.origin, online: device.online, hasToken: device.hasToken, busy: busy, error: err, sessions: sessions });
-					}
-					remoteRows = states;
-				}
-				catch (e3) { /* ignore */ }
-				if (alive) setModel({ local: localList, remotes: remoteRows, at: Date.now() });
+			function load() {
+				get("state").then(function (payload) { if (alive) setDevices(payload.remote || []); })
+					.catch(function () { /* keep last */ });
 			}
 			load();
-			timer = setInterval(load, 20000);
+			timer = setInterval(load, 15000);
 			return function () { alive = false; if (timer) clearInterval(timer); };
 		}, []);
 
-		function openLocalSession(id) {
-			var svc = fleetStore.services && fleetStore.services.sessions;
-			if (svc && typeof svc.open === "function") {
-				try { svc.open(id); } catch (e) { /* ignore */ }
-				fleetClose(); // opening a local session leaves the remote pane
-			}
-		}
-
-		if (!wide) {
-			return h("div", { className: "hw-sbtree hw-sbtree-rail" },
-				h("style", null, CSS),
-				h("button", { className: "hw-sb-railbtn", title: "展开侧栏查看本机/远程会话", onClick: expandSidebar }, "⇔"),
-				((model && model.remotes) || []).map(function (device) {
-					var color = !device.online ? "#9ca3af" : "#22c55e";
-					return h("button", { key: device.id, className: "hw-sb-railbtn" + (device.busy ? " hw-sb-busy" : ""), title: device.name + (device.busy ? " · 运行中" : device.online ? "" : " · 离线"), style: { color: color }, onClick: expandSidebar }, (device.name ? String(device.name).charAt(0).toUpperCase() : "R"));
-				}));
-		}
-
-		var localRows = (model && model.local || []).map(function (ws) {
-			var key = "ws:" + ws.cwd;
-			var isOpen = !!opened[key];
-			var sessions = ws.sessions || [];
-			return h("div", { key: key, className: "hw-sb-group" },
-				h("button", { className: "hw-sb-node" + (isOpen ? " hw-sb-open" : ""), onClick: function () { toggleOpen(key); }, title: ws.cwd },
-					h("span", { className: "hw-sb-caret" }, isOpen ? "▾" : "▸"),
-					h("span", { className: "hw-sb-name" }, ws.name || "(无目录)"),
-					h("span", { className: "hw-sb-count" }, sessions.length)),
-				isOpen ? h("div", { className: "hw-sb-children" }, sessions.length ? sessions.map(function (session) {
-					var title = session.title || (session.id ? session.id.slice(0, 24) + "…" : "?");
-					return h("button", { key: session.id, className: "hw-sb-leaf", title: session.id + "\n更新 " + fmtTime(session.fileModifiedMs), onClick: function () { openLocalSession(session.id); } },
-						h("span", { className: "hw-sb-dot", style: { background: "#3b82f6" } }),
-						h("span", { className: "hw-sb-name" }, String(title).slice(0, 90)),
-						h("span", { className: "hw-sb-count" }, fmtTime(session.fileModifiedMs).slice(5, 16)));
-				}) : h("div", { className: "hw-sb-empty" }, "该工作区暂无会话")) : null);
-		});
-
-		var remoteRows = (model && model.remotes || []).map(function (device) {
-			var key = "dev:" + device.id;
-			var isOpen = !!opened[key];
-			var color = device.online ? "#22c55e" : "#9ca3af";
-			return h("div", { key: key, className: "hw-sb-group" },
-				h("button", { className: "hw-sb-node" + (isOpen ? " hw-sb-open" : ""), onClick: function () { toggleOpen(key); }, title: device.origin },
-					h("span", { className: "hw-sb-caret" }, isOpen ? "▾" : "▸"),
-					h("span", { className: "hw-dot hw-sb-pulse" + (device.busy ? "" : " hw-sb-idle"), style: { background: color } }),
-					h("span", { className: "hw-sb-name" }, device.name || device.origin),
-					device.busy ? h("span", { className: "hw-sb-tag" }, "运行中") : (!device.online ? h("span", { className: "hw-sb-tag" }, "离线") : null),
-					device.hasToken ? null : h("span", { className: "hw-sb-tag" }, "无令牌")),
-				isOpen ? h("div", { className: "hw-sb-children" },
-					device.sessions && device.sessions.length ? device.sessions.map(function (session) {
-						var title = session.title || (session.id ? session.id.slice(0, 24) + "…" : "?");
-						return h("button", { key: session.id, className: "hw-sb-leaf", title: "点开在窗口内打开该设备 dsh\n" + session.id + "\n更新 " + fmtTime(session.fileModifiedMs), onClick: function () { fleetOpenDevice({ id: device.id, name: device.name, origin: device.origin }); } },
-							h("span", { className: "hw-sb-dot", style: { background: "#a78bfa" } }),
-							h("span", { className: "hw-sb-name" }, String(title).slice(0, 90)),
-							h("span", { className: "hw-sb-count" }, fmtTime(session.fileModifiedMs).slice(5, 16)));
-					}) : h("div", { className: "hw-sb-empty" }, !device.online ? "设备不可达" : device.hasToken ? "该设备暂无会话" : "未配令牌,无法读取会话"))
-				: null);
-		});
-
-		return h("div", { className: "hw-sbtree", ref: setHostNode },
-			h("style", null, CSS),
-			h("div", { className: "hw-sb-head" }, "工作区", model ? h("span", { className: "hw-sb-count" }, "刷新 " + fmtTime(model.at).slice(5, 16)) : null),
-			localRows.length ? localRows : h("div", { className: "hw-sb-empty" }, "暂无本机会话"),
-			h("div", { className: "hw-sb-head" }, "远程设备"),
-			remoteRows.length ? remoteRows : h("div", { className: "hw-sb-empty" }, "未配置远程设备(设置 → Harness Fleet 添加)"));
+		if (!devices || devices.length === 0) return null;
+		var isRemote = store.open && !!store.device;
+		var makeTab = function (label, active, onClick) {
+			return h("button", { className: "hw-tab" + (active ? " hw-tab-active" : ""), onClick: onClick, title: label }, label);
+		};
+		var bar = h("div", { className: "hw-tabs" },
+			makeTab("本机", !isRemote, fleetClose),
+			devices.map(function (device) {
+				var active = isRemote && store.device && store.device.id === device.id;
+				return makeTab(device.name || device.origin, active, function () { fleetOpenDevice({ id: device.id, name: device.name, origin: device.origin }); });
+			}));
+		var content = isRemote
+			? h("div", { className: "hw-remotehost" }, h("iframe", { key: store.device.origin, src: store.device.origin, className: "hw-frame", title: (store.device.name || "remote dsh") }))
+			: null;
+		return h("div", null, h("style", null, CSS), bar, content);
 	}
 
 	function apply(ctx) {
-		fleetStore.services = {
-			sessions: ctx.get("sessions"),
-			workspaces: ctx.get("workspaces"),
-			layout: ctx.get("layout"),
-		};
-		ctx.slots.inject("sidebar.workspaces", function () {
-			return ctx.slots.register({ name: "sidebar.workspaces", priority: -1 }, function (ownerProps) { return h(FleetWorkspaceBrowser, ownerProps); });
-		});
 		ctx.slots.inject("settings.section", function () {
 			var off = ctx.slots.register({
 				name: "settings.section",
