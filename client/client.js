@@ -981,8 +981,14 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 		var setDockOpen = openState[1];
 		var DOCK_W = 260;
 		var dockWidth = dockOpen ? DOCK_W : 44;
+		var viewportState = React.useState({ w: 1280, h: 800 });
+		var viewport = viewportState[0];
+		var setViewport = viewportState[1];
 
 		React.useEffect(function () {
+			var measure = function () { setViewport({ w: window.innerWidth || 1280, h: window.innerHeight || 800 }); };
+			measure();
+			window.addEventListener("resize", measure);
 			var unlock = unlockAudio;
 			window.addEventListener("pointerdown", unlock, { once: true });
 			window.addEventListener("keydown", unlock, { once: true });
@@ -998,33 +1004,32 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 				catch (e) { /* keep */ }
 				var probes = [];
 				probes.push(get("local-fresh").then(function (p) {
-					return { id: "local", name: "本机", origin: null, online: true, hasToken: true, newest: p.newestLocal || 0, err: null };
+					return { id: "local", name: "本机", online: true, hasToken: true, newest: p.newestLocal || 0, err: null };
 				}).catch(function (e2) {
-					return { id: "local", name: "本机", origin: null, online: true, hasToken: true, newest: 0, err: String((e2 && e2.message) || e2) };
+					return { id: "local", name: "本机", online: true, hasToken: true, newest: 0, err: String((e2 && e2.message) || e2) };
 				}));
 				if (remoteList) {
 					remoteList.forEach(function (remote) {
 						probes.push(get("remote-fresh?remote=" + encodeURIComponent(remote.id)).then(function (p) {
 							dockFreshCache[remote.id] = { newest: p.newestLocal || 0, at: Date.now() };
-							return { id: remote.id, name: remote.name || remote.origin, origin: remote.origin, online: remote.online, hasToken: !!remote.hasToken, newest: p.newestLocal || 0, err: null, degraded: false };
+							return { id: remote.id, name: remote.name || remote.origin, online: remote.online, hasToken: !!remote.hasToken, newest: p.newestLocal || 0, err: null };
 						}).catch(function () {
-							// Old remote (<0.10) lacks /fresh: degrade via cached value or a throttled sessions fallback.
 							var cached = dockFreshCache[remote.id];
 							var now = Date.now();
 							if (cached && now - cached.at < 120000) {
-								return { id: remote.id, name: remote.name || remote.origin, origin: remote.origin, online: remote.online, hasToken: !!remote.hasToken, newest: cached.newest, err: null, degraded: true };
+								return { id: remote.id, name: remote.name || remote.origin, online: remote.online, hasToken: !!remote.hasToken, newest: cached.newest, err: null };
 							}
 							if (now - (dockFreshFallback[remote.id] || 0) < 20000) {
-								return { id: remote.id, name: remote.name || remote.origin, origin: remote.origin, online: remote.online, hasToken: !!remote.hasToken, newest: 0, err: "读取失败(重试间隔中)", degraded: true };
+								return { id: remote.id, name: remote.name || remote.origin, online: remote.online, hasToken: !!remote.hasToken, newest: 0, err: "读取失败(重试间隔中)" };
 							}
 							dockFreshFallback[remote.id] = now;
 							return get("remote-sessions?remote=" + encodeURIComponent(remote.id)).then(function (s) {
 								var newest = 0;
 								(s.sessions || []).forEach(function (x) { if ((x.fileModifiedMs || 0) > newest) newest = x.fileModifiedMs; });
 								dockFreshCache[remote.id] = { newest: newest, at: Date.now() };
-								return { id: remote.id, name: remote.name || remote.origin, origin: remote.origin, online: remote.online, hasToken: !!remote.hasToken, newest: newest, err: null, degraded: true };
+								return { id: remote.id, name: remote.name || remote.origin, online: remote.online, hasToken: !!remote.hasToken, newest: newest, err: null };
 							}).catch(function (e3) {
-								return { id: remote.id, name: remote.name || remote.origin, origin: remote.origin, online: remote.online, hasToken: !!remote.hasToken, newest: 0, err: String((e3 && e3.message) || e3) + " — 请把远端升级到 dsh-fleet ≥0.10", degraded: true };
+								return { id: remote.id, name: remote.name || remote.origin, online: remote.online, hasToken: !!remote.hasToken, newest: 0, err: String((e3 && e3.message) || e3) + " — 远端需升级到 ≥0.10" };
 							});
 						}));
 					});
@@ -1040,10 +1045,10 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 						if (prev && prev.busy && !busy) { prev.finishedAt = Date.now(); chime = true; }
 						var finished = !!prev && !!prev.finishedAt && (Date.now() - prev.finishedAt) < 8000;
 						monitorPrev[r.id] = prev ? { busy: busy, finishedAt: prev.finishedAt || 0 } : { busy: busy, finishedAt: 0 };
-						next[r.id] = { busy: busy, finished: finished, online: r.online, hasToken: r.hasToken, readError: r.err, newest: r.newest, name: r.name, origin: r.origin };
+						next[r.id] = { busy: busy, finished: finished, online: r.online, hasToken: r.hasToken, readError: r.err, newest: r.newest, name: r.name };
 					});
 					setStatuses(next);
-					if (chime) playChime();
+					if (chime) { console.info("[dsh-fleet] completion detected -> chime"); playChime(); }
 				}).catch(function () { /* ignore */ });
 			}
 			tick();
@@ -1051,6 +1056,7 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 			return function () {
 				alive = false;
 				if (timer) clearInterval(timer);
+				window.removeEventListener("resize", measure);
 				window.removeEventListener("pointerdown", unlock);
 				window.removeEventListener("keydown", unlock);
 			};
@@ -1076,11 +1082,11 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 			else if (busy) { indicator = h("span", { className: "hw-spin" }); statusText = "运行中"; }
 			else if (finished) { indicator = h("span", { style: { color: "#22c55e", fontWeight: 700 } }, "✓"); statusText = "刚完成"; }
 			else { indicator = h("span", { className: "hw-mon-dot", style: { background: "#22c55e" } }); statusText = "空闲"; }
-			var sub = entry.id === "local" ? "本机 DeepSeek Harness" : (entry.origin || "");
+			var sub = entry.id === "local" ? "本机 DeepSeek Harness" : (s.name || "");
 			var meta = s.newest ? ("活跃 " + fmtTime(s.newest).slice(5, 16)) : (offline ? "" : (readFail ? String(s.readError || "").slice(0, 60) : ""));
 			return h("button", { key: entry.id, className: "hw-card" + (active ? " hw-card-active" : ""), onClick: function () {
 				if (entry.id === "local") { fleetStore.open = false; fleetStore.device = null; fleetNotify(); }
-				else { fleetOpenDevice({ id: entry.id, name: s.name || entry.name, origin: entry.origin || entry.name }); }
+				else { fleetOpenDevice({ id: entry.id, name: s.name || entry.name, origin: entry.origin || s.name }); }
 			} },
 				h("div", { className: "hw-card-row" }, indicator, h("span", { className: "hw-card-name" }, entry.name || entry.id)),
 				h("div", { className: "hw-card-sub" }, sub),
@@ -1094,27 +1100,19 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 		var entries = [{ id: "local", name: "本机" }];
 		if (devices) devices.forEach(function (device) { entries.push({ id: device.id, name: device.name || device.origin, origin: device.origin }); });
 
-		// Without remotes, hide the dock UI entirely but keep monitoring/sound running.
-		if (!devices || devices.length === 0) return null;
+		var body = h("div", { className: "hw-dock-body" }, entries.map(cardFor),
+			h("div", { className: "hw-dock-empty", style: { fontSize: 11 } }, (!devices || devices.length === 0) ? "未配置远程设备(设置 → Harness Fleet 添加)" : "状态 4s 刷新 · 点卡片切换 · 完成有提示音"));
 
-		var body = dockOpen
-			? h("div", { className: "hw-dock-body" }, entries.map(cardFor),
-				h("div", { className: "hw-dock-empty", style: { fontSize: 11 } }, "状态 4s 刷新 · 点卡片切换 · 完成有提示音"))
-			: null;
-
-		/* Full-viewport parent fixed; children laid out absolutely inside it so
-		   nothing depends on the overlay host's containing block. */
-		var boxStyle = { position: "fixed", inset: "0px", margin: "0", padding: "0", zIndex: 2147483300, pointerEvents: "none", background: "transparent" };
-		var dockStyle = { position: "absolute", top: "0px", right: "0px", bottom: "0px", width: dockWidth + "px", pointerEvents: "auto", background: "#101318", color: "#e7e7ea", borderLeft: "1px solid rgba(255,255,255,.1)", display: "flex", flexDirection: "column" };
+		/* Numeric pixel sizing (immune to CSS stretch quirks for replaced iframes). */
+		var barW = dockOpen ? DOCK_W : 44;
+		var frameW = Math.max(0, viewport.w - barW - 1);
+		var dockStyle = { position: "fixed", top: "0px", right: "0px", width: barW + "px", height: viewport.h + "px", pointerEvents: "auto", background: "#101318", color: "#e7e7ea", borderLeft: "1px solid rgba(255,255,255,.1)", display: "flex", flexDirection: "column", boxSizing: "border-box" };
 		var layer = null;
 		if (showRemote && activeDevice) {
-			var frameStyle = { position: "absolute", top: "0px", bottom: "0px", left: "0px", right: (dockWidth + 1) + "px", width: "auto", height: "auto", border: "0", background: "#fff" };
+			var frameStyle = { position: "fixed", top: "0px", left: "0px", width: frameW + "px", height: viewport.h + "px", border: "0", background: "#fff", display: "block" };
 			layer = h("iframe", { key: activeDevice.origin, src: activeDevice.origin, style: frameStyle, title: activeDevice.name || "remote dsh", allow: "clipboard-read; clipboard-write; fullscreen" });
 		}
-		return h("div", { style: boxStyle },
-			h("style", null, CSS),
-			layer,
-			h("div", { style: dockStyle }, head, body));
+		return h("div", null, h("style", null, CSS), layer, h("div", { style: dockStyle }, head, body));
 	}
 
 	function apply(ctx) {
@@ -1164,6 +1162,7 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 					rootHandle.render(element);
 					mounted.root = { unmount: function () { try { rootHandle.unmount(); } catch (e) { /* ignore */ } } };
 				}
+				console.info("[dsh-fleet] dock body-mounted on <body>");
 				return true;
 			}
 			catch (error) {
