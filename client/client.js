@@ -1103,6 +1103,42 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 		var framesState = React.useState([]); // [{origin,name}] most-recent-first
 		var openedFrames = framesState[0];
 		var setOpenedFrames = framesState[1];
+		/* Manual / auto refresh: bumping a per-origin nonce rebuilds that iframe
+		   (new React key), which is the only reliable cross-origin page refresh. */
+		var nonceState = React.useState({});
+		var frameNonces = nonceState[0];
+		var setFrameNonces = nonceState[1];
+		function refreshRemoteFrame(origin) {
+			if (!origin) return;
+			setFrameNonces(function (prev) {
+				var next = Object.assign({}, prev);
+				next[origin] = (next[origin] || 0) + 1;
+				return next;
+			});
+			console.info("[dsh-fleet] refresh frame:", origin);
+		}
+		/* After a restart request, remember which origin should be auto-refreshed
+		   once it comes back online (only when that machine is being viewed).
+		   We wait until the remote has actually been seen offline, so the refresh
+		   lands on the freshly-restarted page rather than the old one. */
+		var autoRefreshState = React.useState(null); // { id, origin, requestAt }
+		var autoRefreshTarget = autoRefreshState[0];
+		var setAutoRefreshTarget = autoRefreshState[1];
+		var downSeenRef = React.useRef({});
+		React.useEffect(function () {
+			if (!autoRefreshTarget) return;
+			var t = autoRefreshTarget;
+			var s = statuses[t.id];
+			if (s) {
+				if (s.online === false) downSeenRef.current[t.id] = true;
+				else if (s.online !== false && downSeenRef.current[t.id] === true && Date.now() - t.requestAt > 6000) {
+					downSeenRef.current[t.id] = false;
+					refreshRemoteFrame(t.origin);
+					setAutoRefreshTarget(null);
+				}
+			}
+			// eslint-disable-next-line react-hooks/exhaustive-deps
+		}, [statuses, autoRefreshTarget]);
 		/* Per-remote restart in-flight bookkeeping: id -> true while requesting. */
 		var restartState = React.useState({});
 		var restartingIds = restartState[0];
@@ -1418,6 +1454,7 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 				else { fleetOpenDevice({ id: entry.id, name: s.name || entry.name, origin: entry.origin || s.name }); }
 			};
 			var restartButton = null;
+			var refreshButton = null;
 			if (isRemote) {
 				var canRestart = !offline && !noToken && !restarting;
 				restartButton = h("button", {
@@ -1434,6 +1471,8 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 							.then(function () {
 								clearRestartingId(entry.id);
 								console.info("[dsh-fleet] remote restart requested:", entry.id);
+								// Refresh that remote's page once it is reachable again.
+								setAutoRefreshTarget({ id: entry.id, origin: entry.origin || entry.name, requestAt: Date.now() });
 							})
 							.catch(function (err) {
 								clearRestartingId(entry.id);
@@ -1441,12 +1480,23 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 							});
 					},
 				}, restarting ? "重启中…" : "重启");
+				refreshButton = h("button", {
+					className: "hw-dock-mini",
+					title: offline ? "设备离线" : "重新加载该远程终端的页面(如重启后需刷新)",
+					disabled: offline,
+					onClick: function (e) {
+						e.stopPropagation();
+						e.preventDefault();
+						if (offline) return;
+						refreshRemoteFrame(entry.origin || entry.name);
+					},
+				}, "刷新");
 			}
 			return h("div", { key: entry.id, className: "hw-card" + (active ? " hw-card-active" : ""), onClick: openDevice },
 				h("div", { className: "hw-card-row" }, indicator, h("span", { className: "hw-card-name" }, entry.name || entry.id)),
 				h("div", { className: "hw-card-sub" }, sub),
 				h("div", { className: "hw-card-row" }, h("span", { className: "hw-card-sub" }, meta), h("span", { className: "hw-card-status" }, statusText)),
-				restartButton ? h("div", { className: "hw-card-actions" }, restartButton) : null);
+				(refreshButton || restartButton) ? h("div", { className: "hw-card-actions" }, refreshButton, restartButton) : null);
 		}
 
 		var head = dockOpen
@@ -1485,7 +1535,7 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 				? { position: "fixed", top: "0px", left: "0px", width: frameW + "px", height: viewport.h + "px", border: "0", background: "#fff", display: "block", pointerEvents: "auto", zIndex: 1 }
 				: { position: "fixed", top: "0px", left: "0px", width: "1px", height: "1px", border: "0", display: "none", pointerEvents: "none", zIndex: -1, visibility: "hidden" };
 			return h("iframe", {
-				key: frame.origin,
+				key: frame.origin + "::" + (frameNonces[frame.origin] || 0),
 				src: frame.origin,
 				style: style,
 				title: frame.name || "remote dsh",
@@ -1502,7 +1552,28 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 				style: { position: "absolute", left: "-5px", top: "0px", bottom: "0px", width: "9px", cursor: "col-resize", zIndex: 3 },
 			})
 			: null;
-		return h("div", null, h("style", null, CSS), frameNodes, h("div", { "data-hw-dock": "1", style: dockStyle }, grip, head, body));
+		/* Floating refresh pill over the active remote view (works even when the
+		   dock is collapsed). Rebuilds the iframe = full page reload. */
+		var floatRefresh = (showRemote && activeDevice)
+			? h("button", {
+				"data-hw-dock": "1",
+				title: "重新加载当前远程页面(重启后若页面卡住,点这里)",
+				onClick: function (e) {
+					e.stopPropagation();
+					e.preventDefault();
+					refreshRemoteFrame(activeDevice.origin);
+				},
+				style: {
+					position: "fixed", top: "10px", right: (barW + 10) + "px", zIndex: 5,
+					border: "1px solid rgba(255,255,255,.35)", background: "rgba(20,24,30,.82)",
+					color: "#fff", borderRadius: "999px", padding: "5px 12px", cursor: "pointer",
+					fontSize: "12px", lineHeight: "1", fontFamily: "inherit",
+					boxShadow: "0 2px 10px rgba(0,0,0,.3)", display: "flex", alignItems: "center", gap: "5px",
+					opacity: ".92",
+				},
+			}, "⟳ 刷新远程页面")
+			: null;
+		return h("div", null, h("style", null, CSS), frameNodes, floatRefresh, h("div", { "data-hw-dock": "1", style: dockStyle }, grip, head, body));
 	}
 
 	function apply(ctx) {
