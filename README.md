@@ -97,6 +97,12 @@ dsh 出于安全默认只监听 127.0.0.1,其它机器连不到。**Fleet 网关
   强制令牌;默认关闭;
 - 远程令牌只存宿主配置、响应不回传;内容按量截断并给出"过长已截断"标记。
 
+### 测试期自更新(v0.6)
+- 设置页底部「关于 · 测试期更新」自动检查 GitHub 最新版本并提醒;
+- 点「更新并重启」:宿主在 profile 内执行 `pnpm add github:loveXbanshee/dsh-fleet`
+  拉新代码,Windows 上随后自动重启 dsh web 生效;其它平台更新后请手动重启;
+- 检查/更新/重启接口仅限同源环回调用;失败会给出原因与提示。
+
 ## API(宿主注册,前缀 `/dsh-fleet/api`)
 | 路由 | 方法 | 说明 |
 | --- | --- | --- |
@@ -108,6 +114,9 @@ dsh 出于安全默认只监听 127.0.0.1,其它机器连不到。**Fleet 网关
 | `/set-start-command` | POST | `{ port, command }` |
 | `/set-serve-token` | POST | `{ token }`(留空=关闭) |
 | `/set-gateway` | POST | `{ enabled, port?, host? }`(Fleet 网关,环回) |
+| `/update-check` | GET | 检查 GitHub 最新版本(环回) |
+| `/self-update` | POST | 从 GitHub 拉新代码(环回) |
+| `/restart` | POST | Windows 一键重启(环回) |
 | `/local-sessions` `/local-session-content` | GET | 本机会话索引(`includeTitles=1`)/全文 `?id=` |
 | `/remote-sessions` `/remote-session-content` | GET | 代理远程(本机用) |
 | `/sessions` `/session-content` | GET | **对外服务**(需 `?token=`) |
