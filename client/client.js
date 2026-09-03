@@ -968,7 +968,8 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 		var openState = React.useState(true);
 		var dockOpen = openState[0];
 		var setDockOpen = openState[1];
-		var dockWidth = dockOpen ? 320 : 44;
+		var DOCK_W = 260;
+		var dockWidth = dockOpen ? DOCK_W : 44;
 
 		React.useEffect(function () {
 			var unlock = function () { audioUnlocked = true; try { if (audioCtx && audioCtx.state === "suspended") audioCtx.resume(); } catch (e) { /* ignore */ } };
@@ -984,30 +985,33 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 					setDevices(remoteList);
 				}
 				catch (e) { /* keep */ }
-				var fetchFresh = function (kind, remote) {
-					var url = kind === "local" ? "local-fresh" : "remote-fresh?remote=" + encodeURIComponent(remote.id);
-					return get(url).then(function (payload) {
-						return { id: kind === "local" ? "local" : remote.id, name: kind === "local" ? "本机" : (remote.name || remote.origin), origin: kind === "local" ? null : remote.origin, online: kind === "local" ? true : remote.online, newest: payload.newestLocal || 0, err: null };
-					}).catch(function (e2) {
-						return { id: kind === "local" ? "local" : remote.id, name: kind === "local" ? "本机" : (remote.name || remote.origin), origin: kind === "local" ? null : remote.origin, online: kind === "local" ? true : false, newest: 0, err: String((e2 && e2.message) || e2) };
+				var probes = [];
+				probes.push(get("local-fresh").then(function (p) {
+					return { id: "local", name: "本机", origin: null, online: true, hasToken: true, newest: p.newestLocal || 0, err: null };
+				}).catch(function (e2) {
+					return { id: "local", name: "本机", origin: null, online: true, hasToken: true, newest: 0, err: String((e2 && e2.message) || e2) };
+				}));
+				if (remoteList) {
+					remoteList.forEach(function (remote) {
+						probes.push(get("remote-fresh?remote=" + encodeURIComponent(remote.id)).then(function (p) {
+							return { id: remote.id, name: remote.name || remote.origin, origin: remote.origin, online: remote.online, hasToken: !!remote.hasToken, newest: p.newestLocal || 0, err: null };
+						}).catch(function (e2) {
+							return { id: remote.id, name: remote.name || remote.origin, origin: remote.origin, online: remote.online, hasToken: !!remote.hasToken, newest: 0, err: String((e2 && e2.message) || e2) };
+						}));
 					});
-				};
-				var probes = [fetchFresh("local", null)];
-				if (remoteList) remoteList.forEach(function (remote) { probes.push(fetchFresh("remote", remote)); });
+				}
 				return Promise.all(probes).then(function (results) {
 					if (!alive) return;
 					var next = {};
 					var chime = false;
-					results.forEach(function (probe) {
-						var prev = monitorPrev[probe.id];
-						var busy = probe.err == null && probe.online && probe.newest > 0 && (Date.now() - probe.newest) < 45000;
-						if (prev && prev.busy && !busy) {
-							prev.finishedAt = Date.now();
-							chime = true;
-						}
-						var finishedRecent = !!prev && !!prev.finishedAt && (Date.now() - prev.finishedAt) < 8000;
-						monitorPrev[probe.id] = prev ? { busy: busy, finishedAt: prev.finishedAt || 0 } : { busy: busy, finishedAt: 0 };
-						next[probe.id] = { busy: busy, finished: finishedRecent, offline: probe.err != null || !probe.online, name: probe.name, origin: probe.origin, newest: probe.newest, err: probe.err };
+					results.forEach(function (r) {
+						var prev = monitorPrev[r.id];
+						var readOk = r.err == null && r.newest > 0;
+						var busy = r.online && readOk && (Date.now() - r.newest) < 60000;
+						if (prev && prev.busy && !busy) { prev.finishedAt = Date.now(); chime = true; }
+						var finished = !!prev && !!prev.finishedAt && (Date.now() - prev.finishedAt) < 8000;
+						monitorPrev[r.id] = prev ? { busy: busy, finishedAt: prev.finishedAt || 0 } : { busy: busy, finishedAt: 0 };
+						next[r.id] = { busy: busy, finished: finished, online: r.online, hasToken: r.hasToken, readError: r.err, newest: r.newest, name: r.name, origin: r.origin };
 					});
 					setStatuses(next);
 					if (chime) playChime();
@@ -1027,26 +1031,33 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 		var activeDevice = store.device;
 
 		function cardFor(entry) {
-			var status = statuses[entry.id] || {};
-			var busy = !!status.busy;
-			var finished = !!status.finished;
-			var offline = !!status.offline;
+			var s = statuses[entry.id] || { online: true, hasToken: true };
+			var isRemote = entry.id !== "local";
+			var busy = !!s.busy;
+			var finished = !!s.finished;
+			var offline = isRemote && s.online === false;
+			var noToken = isRemote && s.online && !s.hasToken;
+			var readFail = isRemote && s.online && s.hasToken && !!s.readError;
 			var active = entry.id === "local" ? !showRemote : (showRemote && activeDevice && activeDevice.id === entry.id);
-			var indicator = busy ? h("span", { className: "hw-spin" }) : finished ? h("span", { style: { color: "#22c55e", fontWeight: 700 } }, "✓") : h("span", { style: { background: offline ? "#9ca3af" : "#22c55e" }, className: "hw-mon-dot" });
-			var statusText = busy ? "运行中" : finished ? "刚完成" : offline ? "离线" : "空闲";
+			var indicator;
+			var statusText;
+			if (offline) { indicator = h("span", { className: "hw-mon-dot", style: { background: "#9ca3af" } }); statusText = "离线"; }
+			else if (noToken) { indicator = h("span", { className: "hw-mon-dot", style: { background: "#eab308" } }); statusText = "未配令牌"; }
+			else if (readFail) { indicator = h("span", { className: "hw-mon-dot", style: { background: "#ef4444" } }); statusText = "状态读取失败"; }
+			else if (busy) { indicator = h("span", { className: "hw-spin" }); statusText = "运行中"; }
+			else if (finished) { indicator = h("span", { style: { color: "#22c55e", fontWeight: 700 } }, "✓"); statusText = "刚完成"; }
+			else { indicator = h("span", { className: "hw-mon-dot", style: { background: "#22c55e" } }); statusText = "空闲"; }
 			var sub = entry.id === "local" ? "本机 DeepSeek Harness" : (entry.origin || "");
+			var meta = s.newest ? ("活跃 " + fmtTime(s.newest).slice(5, 16)) : (offline ? "" : (readFail ? String(s.readError || "").slice(0, 60) : ""));
 			return h("button", { key: entry.id, className: "hw-card" + (active ? " hw-card-active" : ""), onClick: function () {
 				if (entry.id === "local") { fleetStore.open = false; fleetStore.device = null; fleetNotify(); }
-				else { fleetOpenDevice({ id: entry.id, name: entry.name, origin: entry.origin }); }
+				else { fleetOpenDevice({ id: entry.id, name: s.name || entry.name, origin: entry.origin || entry.name }); }
 			} },
 				h("div", { className: "hw-card-row" }, indicator, h("span", { className: "hw-card-name" }, entry.name || entry.id)),
 				h("div", { className: "hw-card-sub" }, sub),
-				h("div", { className: "hw-card-row" },
-					h("span", { className: "hw-card-sub" }, status.newest ? ("活跃 " + fmtTime(status.newest).slice(5, 16)) : ""),
-					h("span", { className: "hw-card-status" + (busy ? " busy" : "") }, statusText)));
+				h("div", { className: "hw-card-row" }, h("span", { className: "hw-card-sub" }, meta), h("span", { className: "hw-card-status" }, statusText)));
 		}
 
-		var dockStyle = { width: dockWidth + "px" };
 		var head = dockOpen
 			? h("div", { className: "hw-dock-head" }, "设备", h("button", { className: "hw-dock-toggle", onClick: function () { setDockOpen(false); } }, "»"))
 			: h("div", { className: "hw-dock-head", style: { padding: "8px 0", justifyContent: "center" } }, h("button", { className: "hw-dock-toggle", title: "展开设备栏", onClick: function () { setDockOpen(true); } }, "«"));
@@ -1056,16 +1067,17 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 
 		var body = dockOpen
 			? h("div", { className: "hw-dock-body" }, entries.map(cardFor),
-				h("div", { className: "hw-dock-empty", style: { fontSize: 11 } }, "提示音/状态每 4s 刷新;点卡片切换;完成会响提示音"))
+				h("div", { className: "hw-dock-empty", style: { fontSize: 11 } }, "状态 4s 刷新 · 点卡片切换 · 完成有提示音"))
 			: null;
 
 		var layer = null;
 		if (showRemote && activeDevice) {
-			layer = h("iframe", { key: activeDevice.origin, src: activeDevice.origin, className: "hw-device-layer", style: { right: dockWidth + "px" }, title: activeDevice.name || "remote dsh" });
+			var frameStyle = { position: "fixed", top: "0px", bottom: "0px", left: "0px", right: (dockWidth + 1) + "px", width: "auto", height: "auto", border: "0", background: "#fff", zIndex: 2147483400 };
+			layer = h("iframe", { key: activeDevice.origin, src: activeDevice.origin, style: frameStyle, title: activeDevice.name || "remote dsh", allow: "clipboard-read; clipboard-write; fullscreen" });
 		}
 		return h("div", null, h("style", null, CSS),
 			layer,
-			h("div", { className: "hw-dock", style: dockStyle }, head, body));
+			h("div", { className: "hw-dock", style: { width: dockWidth + "px" } }, head, body));
 	}
 
 	function apply(ctx) {
