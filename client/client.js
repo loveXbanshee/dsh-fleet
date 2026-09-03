@@ -317,6 +317,64 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 			setGwHost(String(data.gateway.host));
 		}, [data && data.gateway ? data.gateway.port : 0, data && data.gateway ? data.gateway.host : "", data && data.gateway ? data.gateway.configured : false]);
 
+		/* ---- test-stage self-update ---- */
+		var updateInfoState = React.useState(null);
+		var updateInfo = updateInfoState[0];
+		var setUpdateInfo = updateInfoState[1];
+		var updateBusyState = React.useState(false);
+		var updateBusy = updateBusyState[0];
+		var setUpdateBusy = updateBusyState[1];
+		var updateMsgState = React.useState("");
+		var updateMsg = updateMsgState[0];
+		var setUpdateMsg = updateMsgState[1];
+		var checkedOnceState = React.useState(false);
+		var checkedOnce = checkedOnceState[0];
+		var setCheckedOnce = checkedOnceState[1];
+
+		function doUpdateCheck(force) {
+			setUpdateBusy(true);
+			setUpdateMsg("");
+			return get("update-check" + (force ? "?force=1" : ""))
+				.then(function (payload) { setUpdateInfo(payload); })
+				.catch(function (err) { setUpdateInfo({ ok: false, error: String(err.message || err) }); })
+				.finally(function () { setUpdateBusy(false); });
+		}
+		React.useEffect(function () {
+			if (!checkedOnce && data) {
+				setCheckedOnce(true);
+				doUpdateCheck(false);
+			}
+			// eslint-disable-next-line react-hooks/exhaustive-deps
+		}, [data, checkedOnce]);
+
+		function doSelfUpdate() {
+			setUpdateBusy(true);
+			setUpdateMsg("正在从 GitHub 拉取最新代码…");
+			setError("");
+			return post("self-update", {})
+				.then(function (payload) {
+					if (payload && payload.updated) {
+						setUpdateInfo({ ok: true, current: payload.current, latest: payload.latest, updateAvailable: false });
+						setUpdateBusy(false);
+						setUpdateMsg("新代码已拉取,即将自动重启生效(约 10 秒后恢复,请刷新页面)…");
+						window.setTimeout(function () {
+							fetch(API + "/restart", { method: "POST" })
+								.then(function () { setUpdateMsg("重启指令已发出;页面断开后请稍等并刷新。"); })
+								.catch(function () { setUpdateMsg("重启指令发送失败 — 请手动重启 dsh web 完成更新。"); });
+						}, 1200);
+					}
+					else {
+						setUpdateInfo({ ok: true, current: payload && payload.current, latest: payload && payload.latest, updateAvailable: false });
+						setUpdateBusy(false);
+						setUpdateMsg("已是最新版本,无需更新。");
+					}
+				})
+				.catch(function (err) {
+					setUpdateBusy(false);
+					setUpdateMsg("更新失败: " + String(err.message || err) + " — 请确认该设备能访问 github.com 且装有 pnpm。");
+				});
+		}
+
 		function submitRemote(event) {
 			event.preventDefault();
 			if (!addOrigin.trim()) { setError("请输入远程地址"); return; }
@@ -466,6 +524,23 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 				((data.gateway && data.gateway.listening) ? ("● 监听中 " + data.gateway.host + ":" + data.gateway.port) : (data.gateway && data.gateway.configured) ? ("未监听" + (data.gateway.error ? "(" + data.gateway.error + ")" : (data.serveSessions ? "" : " — 请先在上方设置共享令牌")) + " — 检查端口占用/防火墙") : "未启用"),
 				" · 网关只暴露「会话索引/全文」两个端点并强制要求 serveToken,无任何修改操作;启用后其他机器用「本机局域网IP:该端口」作为远程地址即可读取(免绑 dsh、免命令行)。Windows 首次需在防火墙弹窗点「允许访问」。" + (data.gateway && data.gateway.configured && !data.gateway.listening ? " 若提示端口占用可换端口保存。" : "")),
 
+			h("div", { className: "hw-section" }, "关于 · 测试期更新"),
+			h("div", { className: "hw-row" },
+				h("div", { className: "hw-main" },
+					h("div", { className: "hw-title" }, "dsh-fleet", h("span", { className: "hw-meta" }, "当前 v" + (data.version || "?")), updateInfo && updateInfo.latest ? h("span", { className: "hw-meta" }, "GitHub 最新 v" + updateInfo.latest) : null),
+					h("div", { className: "hw-hint" },
+						updateMsg !== "" ? updateMsg
+							: !updateInfo ? (updateBusy ? "正在检查更新…" : "点击「检查更新」查看 GitHub 最新版本")
+							: !updateInfo.ok ? ("更新检查失败: " + updateInfo.error)
+							: updateInfo.updateAvailable ? ("发现新版本 v" + updateInfo.latest + " — 点击「更新并重启」将从 GitHub 拉取新代码并自动重启生效。")
+							: "已是最新版本。")),
+				h("div", { className: "hw-actions" },
+					btn(updateBusy ? "检查中…" : "检查更新", function () { doUpdateCheck(true); }, null, updateBusy),
+					updateInfo && updateInfo.updateAvailable && !updateBusy
+						? btn("更新并重启", function () { doSelfUpdate(); }, { className: "hw-btn hw-btn-primary" }, updateBusy)
+						: null)),
+			h("div", { className: "hw-hint" }, "测试期版本迭代频繁:任一设备检测到新版后可在此一键更新(插件宿主自动执行 pnpm add github:loveXbanshee/dsh-fleet,完成后自动重启 dsh web)。非 Windows 需手动重启。"),
+
 			h("div", { className: "hw-foot" },
 				"dsh-fleet " + BRAND + " · 「本机会话」= 读取当前 DSH_HOME 的会话日志。跨设备继续旧对话:打开远端 Web 界面进入原会话即可续聊(记录不会重开),或把会话复制为 Markdown 到本地新会话。"));
 	}
@@ -572,6 +647,7 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 		".hw-btn:hover:not(:disabled){background:rgba(128,128,128,.12)}",
 		".hw-btn:disabled{opacity:.45;cursor:not-allowed}",
 		".hw-btn-danger{border-color:rgba(239,68,68,.5);color:#ef4444}",
+		".hw-btn-primary{border-color:rgba(34,197,94,.6);color:#16a34a;font-weight:600}",
 		".hw-btn-mini{padding:1px 6px;font-size:11px}",
 		".hw-input{background:transparent;border:1px solid rgba(128,128,128,.35);border-radius:6px;padding:4px 8px;font-size:12px;color:inherit;min-width:0}",
 		".hw-input:focus{outline:1px solid rgba(59,130,246,.6)}",
