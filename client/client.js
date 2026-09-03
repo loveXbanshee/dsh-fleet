@@ -407,6 +407,19 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 				.then(function () { setAddName(""); setAddOrigin(""); setAddToken(""); setAddInsecure(false); });
 		}
 
+		function restartRemote(item) {
+			if (!window.confirm("重启远程终端「" + item.name + "」?\n远端 dsh web 将重启,约需十几秒恢复。")) return;
+			setBusy(true);
+			setError("");
+			post("remote-restart", { remote: item.id })
+				.then(function () {
+					setError("");
+					refresh(false);
+				})
+				.catch(function (err) { setError("重启请求失败: " + String((err && err.message) || err)); })
+				.finally(function () { setBusy(false); });
+		}
+
 		if (!data) {
 			return h("div", { className: "hw" },
 				h("style", null, CSS),
@@ -492,6 +505,7 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 									: " · 不可达" + (item.error && item.error !== "unreachable" ? " (" + item.error + ")" : "") + " — 请在目标设备开启 Fleet 网关,或让 dsh 绑定局域网IP/隧道;地址不要用 127.0.0.1"))),
 					h("div", { className: "hw-actions" },
 						btn("会话", function () { loadSessions(target, false); }, { title: "读取该设备上的会话记录(需要它在同一插件里配置 serveToken)" }, !okOnline || !item.hasToken),
+						btn("重启", function () { restartRemote(item); }, { title: "重启该远程设备的 dsh web(需要它的 serveToken)" }, !okOnline || !item.hasToken),
 						btn("窗口内打开", function () { fleetOpenDevice({ id: item.id, name: item.name, origin: item.origin }); }, { title: "在当前窗口内嵌打开该设备 dsh(可继续对话)" }, !item.online),
 						btn("新页打开", function () { openOrigin(item.origin); }, null, !item.online),
 						btn("复制", function () { copyText(item.origin); }),
@@ -771,6 +785,10 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 		".hw-card-sub{font-size:11px;opacity:.65;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
 		".hw-card-status{font-size:11px;margin-left:auto;flex:0 0 auto;color:#22c55e}",
 		".hw-card-status.busy{color:#22c55e}",
+		".hw-card-actions{display:flex;justify-content:flex-end;gap:6px;padding-top:2px}",
+		".hw-dock-mini{border:1px solid rgba(255,255,255,.22);background:transparent;color:inherit;border-radius:6px;padding:2px 8px;cursor:pointer;font-size:10px;line-height:1.4}",
+		".hw-dock-mini:hover{background:rgba(255,255,255,.1)}",
+		".hw-dock-mini-disabled{opacity:.4;cursor:not-allowed}",
 		".hw-dock-empty{padding:14px 8px;font-size:12px;opacity:.6;text-align:center}",
 		".hw-device-layer{position:fixed;top:0;bottom:0;left:0;z-index:2147483400;background:#0f1115;display:flex;flex-direction:column}"
 	].join("\n");
@@ -1085,6 +1103,23 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 		var framesState = React.useState([]); // [{origin,name}] most-recent-first
 		var openedFrames = framesState[0];
 		var setOpenedFrames = framesState[1];
+		/* Per-remote restart in-flight bookkeeping: id -> true while requesting. */
+		var restartState = React.useState({});
+		var restartingIds = restartState[0];
+		var setRestartingIds = restartState[1];
+		function restartRemoteId(id) {
+			var next = Object.assign({}, restartingIds);
+			next[id] = true;
+			setRestartingIds(next);
+		}
+		function clearRestartingId(id) {
+			setRestartingIds(function (prev) {
+				if (!prev[id]) return prev;
+				var next = Object.assign({}, prev);
+				delete next[id];
+				return next;
+			});
+		}
 
 		React.useEffect(function () {
 			var measure = function () { setViewport({ w: window.innerWidth || 1280, h: window.innerHeight || 800 }); };
@@ -1366,13 +1401,41 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 			else { indicator = h("span", { className: "hw-mon-dot", style: { background: "#22c55e" } }); statusText = "空闲"; }
 			var sub = entry.id === "local" ? "本机 DeepSeek Harness" : (s.name || "");
 			var meta = s.newest ? ("活跃 " + fmtTime(s.newest).slice(5, 16)) : (offline ? "" : (readFail ? String(s.readError || "").slice(0, 60) : ""));
-			return h("button", { key: entry.id, className: "hw-card" + (active ? " hw-card-active" : ""), onClick: function () {
+			var restarting = isRemote && restartingIds[entry.id];
+			var openDevice = function () {
 				if (entry.id === "local") { fleetStore.open = false; fleetStore.device = null; fleetNotify(); }
 				else { fleetOpenDevice({ id: entry.id, name: s.name || entry.name, origin: entry.origin || s.name }); }
-			} },
+			};
+			var restartButton = null;
+			if (isRemote) {
+				var canRestart = !offline && !noToken && !restarting;
+				restartButton = h("button", {
+					className: "hw-dock-mini" + (canRestart ? "" : " hw-dock-mini-disabled"),
+					title: restarting ? "重启中…" : offline ? "设备离线,无法重启" : noToken ? "未配置令牌,无法重启" : "重启该远程终端(远端 dsh web 会短暂重启)",
+					disabled: !canRestart,
+					onClick: function (e) {
+						e.stopPropagation();
+						e.preventDefault();
+						if (!canRestart) return;
+						if (!window.confirm("重启远程终端「" + (entry.name || entry.id) + "」?\n远端 dsh web 将重启,约需十几秒恢复。")) return;
+						restartRemoteId(entry.id);
+						post("remote-restart", { remote: entry.id })
+							.then(function () {
+								clearRestartingId(entry.id);
+								console.info("[dsh-fleet] remote restart requested:", entry.id);
+							})
+							.catch(function (err) {
+								clearRestartingId(entry.id);
+								window.alert("重启请求失败: " + String((err && err.message) || err));
+							});
+					},
+				}, restarting ? "重启中…" : "重启");
+			}
+			return h("div", { key: entry.id, className: "hw-card" + (active ? " hw-card-active" : ""), onClick: openDevice },
 				h("div", { className: "hw-card-row" }, indicator, h("span", { className: "hw-card-name" }, entry.name || entry.id)),
 				h("div", { className: "hw-card-sub" }, sub),
-				h("div", { className: "hw-card-row" }, h("span", { className: "hw-card-sub" }, meta), h("span", { className: "hw-card-status" }, statusText)));
+				h("div", { className: "hw-card-row" }, h("span", { className: "hw-card-sub" }, meta), h("span", { className: "hw-card-status" }, statusText)),
+				restartButton ? h("div", { className: "hw-card-actions" }, restartButton) : null);
 		}
 
 		var head = dockOpen
