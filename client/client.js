@@ -1129,33 +1129,91 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 		});
 
 		// The shell.overlay slot constrains occupants to a small host box, so the
-		// device dock + remote pane are mounted directly on <body> to guarantee a
-		// true full-viewport layer.
-		var mounted = { root: null, host: null };
+		// device dock + remote pane are preferably mounted directly on <body> for a
+		// true full-viewport layer. If that fails we fall back to the overlay slot.
+		var mounted = { root: null, host: null, fallbackDisposer: null };
+
+		function acquireRenderer() {
+			var candidates = ["react-dom", "react-dom/client"];
+			for (var i = 0; i < candidates.length; i += 1) {
+				try {
+					var mod = require(candidates[i]);
+					if (mod && typeof mod.render === "function") return { render: mod.render, unmount: mod.unmountComponentAtNode };
+					if (mod && mod.createRoot) {
+						return { createRoot: mod.createRoot };
+					}
+				}
+				catch (e) { /* try next */ }
+			}
+			return null;
+		}
+
 		function mountBodyDock() {
+			if (mounted.host) return true;
 			try {
-				var ReactDOM = require("react-dom");
+				var renderer = acquireRenderer();
+				if (!renderer) throw new Error("react-dom not resolvable from module loader");
 				var host = document.createElement("div");
 				host.style.cssText = "position:fixed;inset:0;pointer-events:none;z-index:2147483300";
 				document.body.appendChild(host);
 				mounted.host = host;
-				ReactDOM.render(h(React.createElement(FleetDock, {})), host);
-				mounted.root = ReactDOM;
+				var element = h(React.createElement(FleetDock, {}));
+				if (renderer.render) { renderer.render(element, host); mounted.root = renderer; }
+				else {
+					var rootHandle = renderer.createRoot(host);
+					rootHandle.render(element);
+					mounted.root = { unmount: function () { try { rootHandle.unmount(); } catch (e) { /* ignore */ } } };
+				}
+				return true;
 			}
 			catch (error) {
-				console.error("[dsh-fleet] dock mount failed:", error);
+				console.warn("[dsh-fleet] dock body-mount failed — falling back to overlay:", String((error && error.message) || error));
+				if (mounted.host && mounted.host.parentNode) { try { mounted.host.parentNode.removeChild(mounted.host); } catch (e) { /* ignore */ } }
+				mounted.host = null;
+				return false;
 			}
 		}
+
+		function registerOverlayFallback() {
+			if (mounted.fallbackDisposer) return;
+			ctx.slots.inject("shell.overlay", function () {
+				if (mounted.fallbackDisposer) return function () {};
+				var off = ctx.slots.register({
+					name: "shell.overlay",
+					id: "fleet-dock-fallback",
+					order: 5,
+					label: function () { return "Fleet 设备栏"; },
+				}, function () { return h(FleetDock, {}); });
+				mounted.fallbackDisposer = off;
+				return off;
+			});
+		}
+
 		if (typeof document !== "undefined") {
-			if (document.body) mountBodyDock();
-			else document.addEventListener("DOMContentLoaded", mountBodyDock, { once: true });
+			if (document.body) {
+				if (!mountBodyDock()) registerOverlayFallback();
+			}
+			else {
+				registerOverlayFallback();
+				document.addEventListener("DOMContentLoaded", function () {
+					if (mountBodyDock() && mounted.fallbackDisposer) {
+						try { mounted.fallbackDisposer(); } catch (e) { /* ignore */ }
+						mounted.fallbackDisposer = null;
+					}
+				}, { once: true });
+			}
 		}
 		ctx.effect(function () {
 			return function () {
 				try {
-					if (mounted.host && mounted.root && typeof mounted.root.unmountComponentAtNode === "function") {
-						mounted.root.unmountComponentAtNode(mounted.host);
-					}
+					if (mounted.root && mounted.host && typeof mounted.root.unmount === "function") mounted.root.unmount(mounted.host);
+				}
+				catch (e) { /* ignore */ }
+				try {
+					if (mounted.fallbackDisposer) { mounted.fallbackDisposer(); mounted.fallbackDisposer = null; }
+				}
+				catch (e) { /* ignore */ }
+				try {
 					if (mounted.host && mounted.host.parentNode) mounted.host.parentNode.removeChild(mounted.host);
 				}
 				catch (e) { /* ignore */ }
