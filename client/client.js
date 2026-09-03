@@ -704,11 +704,31 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 		".hw-overlay-bar{display:flex;align-items:center;gap:12px;padding:8px 14px;border-bottom:1px solid rgba(255,255,255,.12);flex-wrap:wrap}",
 		".hw-overlay-title{font-weight:600;font-size:14px}",
 		".hw-frame{flex:1;border:0;background:#fff}",
-		".hw-overlay-empty{padding:32px;text-align:center;color:#9ca3af}"
+		".hw-overlay-empty{padding:32px;text-align:center;color:#9ca3af}",
+		".hw-sbtree{display:flex;flex-direction:column;gap:2px;padding:8px 6px;min-width:0;max-height:100%;overflow:auto}",
+		".hw-sbtree-rail{align-items:center;gap:6px;overflow:visible}",
+		".hw-sb-head{display:flex;align-items:center;justify-content:space-between;font-size:11px;font-weight:700;opacity:.7;text-transform:uppercase;letter-spacing:.03em;padding:6px 4px 2px}",
+		".hw-sb-group{display:flex;flex-direction:column}",
+		".hw-sb-node{display:flex;align-items:center;gap:5px;width:100%;text-align:left;background:transparent;border:0;color:inherit;padding:4px 4px;border-radius:6px;cursor:pointer;font-size:12px;min-width:0}",
+		".hw-sb-node:hover{background:rgba(128,128,128,.12)}",
+		".hw-sb-open{font-weight:600}",
+		".hw-sb-caret{flex:0 0 auto;width:12px;opacity:.7;font-size:10px}",
+		".hw-sb-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+		".hw-sb-count{flex:0 0 auto;font-size:10px;opacity:.55;margin-left:4px}",
+		".hw-sb-tag{flex:0 0 auto;font-size:9px;padding:0 4px;border-radius:6px;background:rgba(128,128,128,.16);opacity:.9}",
+		".hw-sb-children{display:flex;flex-direction:column;margin-left:14px;padding-left:6px;border-left:1px solid rgba(128,128,128,.18)}",
+		".hw-sb-leaf{display:flex;align-items:center;gap:5px;width:100%;text-align:left;background:transparent;border:0;color:inherit;padding:3px 4px;border-radius:6px;cursor:pointer;font-size:12px;min-width:0}",
+		".hw-sb-leaf:hover{background:rgba(128,128,128,.1)}",
+		".hw-sb-dot{width:8px;height:8px;border-radius:50%;flex:0 0 auto;display:inline-block}",
+		".hw-sb-empty{font-size:11px;opacity:.5;padding:2px 6px}",
+		".hw-sb-railbtn{border:1px solid rgba(128,128,128,.3);background:transparent;color:inherit;width:28px;height:28px;border-radius:8px;cursor:pointer;font-size:13px;display:flex;align-items:center;justify-content:center;padding:0}",
+		".hw-sb-railbtn:hover{background:rgba(128,128,128,.14)}",
+		".hw-sb-pulse{animation:hwPulse 1.2s ease-in-out infinite}",
+		".hw-sb-idle{animation:none}"
 	].join("\n");
 
 	/* ---------------- cross-component fleet store ---------------- */
-	var fleetStore = { open: false, device: null, listeners: [] };
+	var fleetStore = { open: false, device: null, listeners: [], services: null };
 	function fleetNotify() {
 		for (var i = 0; i < fleetStore.listeners.length; i += 1) { try { fleetStore.listeners[i](); } catch (e) { /* ignore */ } }
 	}
@@ -836,7 +856,150 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 		return h("div", { className: "hw-overlay" }, h("style", null, CSS), bar, body);
 	}
 
+	/* ---------------- composite sidebar: local workspaces + remote tree ---------------- */
+
+	function FleetWorkspaceBrowser(props) {
+		var wide = props && props.wide !== undefined ? props.wide : true;
+		var expandSidebar = props && props.expandSidebar ? props.expandSidebar : function () {};
+		var modelState = React.useState(null);
+		var model = modelState[0];
+		var setModel = modelState[1];
+		var openState = React.useState({});
+		var opened = openState[0];
+		var setOpened = openState[1];
+
+		function toggleOpen(key) {
+			setOpened(function (prev) {
+				var next = Object.assign({}, prev);
+				next[key] = !prev[key];
+				return next;
+			});
+		}
+
+		React.useEffect(function () {
+			var alive = true;
+			var timer = null;
+			async function load() {
+				var localList = [];
+				try {
+					var page = await get("local-sessions?includeTitles=1");
+					var groups = new Map();
+					(page.sessions || []).forEach(function (s) {
+						var key = s.cwd || "(无目录)";
+						if (!groups.has(key)) groups.set(key, { cwd: key, sessions: [] });
+						groups.get(key).sessions.push(s);
+					});
+					localList = Array.from(groups.values()).map(function (g) {
+						var parts = String(g.cwd).replace(/\\/g, "/").split("/").filter(Boolean);
+						return { cwd: g.cwd, name: parts.length > 0 ? parts[parts.length - 1] : g.cwd, sessions: (g.sessions || []).sort(function (a, b) { return (b.fileModifiedMs || 0) - (a.fileModifiedMs || 0); }) };
+					}).sort(function (a, b) { return a.name.localeCompare(b.name); });
+				}
+				catch (e) { /* ignore */ }
+
+				var remoteRows = [];
+				try {
+					var st = await get("state");
+					var devices = st.remote || [];
+					var states = [];
+					for (var i = 0; i < devices.length; i += 1) {
+						var device = devices[i];
+						var sessions = [];
+						var busy = false;
+						var err = device.online ? undefined : (device.error || "offline");
+						if (device.online && device.hasToken) {
+							try {
+								var rs = await get("remote-sessions?remote=" + encodeURIComponent(device.id) + "&includeTitles=1");
+								sessions = rs.sessions || [];
+								var newest = 0;
+								sessions.forEach(function (s) { if ((s.fileModifiedMs || 0) > newest) newest = s.fileModifiedMs; });
+								busy = (Date.now() - newest) < 45000;
+							}
+							catch (e2) { err = String((e2 && e2.message) || e2); }
+						}
+						states.push({ id: device.id, name: device.name, origin: device.origin, online: device.online, hasToken: device.hasToken, busy: busy, error: err, sessions: sessions });
+					}
+					remoteRows = states;
+				}
+				catch (e3) { /* ignore */ }
+				if (alive) setModel({ local: localList, remotes: remoteRows, at: Date.now() });
+			}
+			load();
+			timer = setInterval(load, 20000);
+			return function () { alive = false; if (timer) clearInterval(timer); };
+		}, []);
+
+		function openLocalSession(id) {
+			var svc = fleetStore.services && fleetStore.services.sessions;
+			if (svc && typeof svc.open === "function") { try { svc.open(id); } catch (e) { /* ignore */ } }
+		}
+
+		if (!wide) {
+			return h("div", { className: "hw-sbtree hw-sbtree-rail" },
+				h("style", null, CSS),
+				h("button", { className: "hw-sb-railbtn", title: "展开侧栏查看本机/远程会话", onClick: expandSidebar }, "⇔"),
+				((model && model.remotes) || []).map(function (device) {
+					var color = !device.online ? "#9ca3af" : "#22c55e";
+					return h("button", { key: device.id, className: "hw-sb-railbtn" + (device.busy ? " hw-sb-busy" : ""), title: device.name + (device.busy ? " · 运行中" : device.online ? "" : " · 离线"), style: { color: color }, onClick: expandSidebar }, (device.name ? String(device.name).charAt(0).toUpperCase() : "R"));
+				}));
+		}
+
+		var localRows = (model && model.local || []).map(function (ws) {
+			var key = "ws:" + ws.cwd;
+			var isOpen = !!opened[key];
+			var sessions = ws.sessions || [];
+			return h("div", { key: key, className: "hw-sb-group" },
+				h("button", { className: "hw-sb-node" + (isOpen ? " hw-sb-open" : ""), onClick: function () { toggleOpen(key); }, title: ws.cwd },
+					h("span", { className: "hw-sb-caret" }, isOpen ? "▾" : "▸"),
+					h("span", { className: "hw-sb-name" }, ws.name || "(无目录)"),
+					h("span", { className: "hw-sb-count" }, sessions.length)),
+				isOpen ? h("div", { className: "hw-sb-children" }, sessions.length ? sessions.map(function (session) {
+					var title = session.title || (session.id ? session.id.slice(0, 24) + "…" : "?");
+					return h("button", { key: session.id, className: "hw-sb-leaf", title: session.id + "\n更新 " + fmtTime(session.fileModifiedMs), onClick: function () { openLocalSession(session.id); } },
+						h("span", { className: "hw-sb-dot", style: { background: "#3b82f6" } }),
+						h("span", { className: "hw-sb-name" }, String(title).slice(0, 90)),
+						h("span", { className: "hw-sb-count" }, fmtTime(session.fileModifiedMs).slice(5, 16)));
+				}) : h("div", { className: "hw-sb-empty" }, "该工作区暂无会话")) : null);
+		});
+
+		var remoteRows = (model && model.remotes || []).map(function (device) {
+			var key = "dev:" + device.id;
+			var isOpen = !!opened[key];
+			var color = device.online ? "#22c55e" : "#9ca3af";
+			return h("div", { key: key, className: "hw-sb-group" },
+				h("button", { className: "hw-sb-node" + (isOpen ? " hw-sb-open" : ""), onClick: function () { toggleOpen(key); }, title: device.origin },
+					h("span", { className: "hw-sb-caret" }, isOpen ? "▾" : "▸"),
+					h("span", { className: "hw-dot hw-sb-pulse" + (device.busy ? "" : " hw-sb-idle"), style: { background: color } }),
+					h("span", { className: "hw-sb-name" }, device.name || device.origin),
+					device.busy ? h("span", { className: "hw-sb-tag" }, "运行中") : (!device.online ? h("span", { className: "hw-sb-tag" }, "离线") : null),
+					device.hasToken ? null : h("span", { className: "hw-sb-tag" }, "无令牌")),
+				isOpen ? h("div", { className: "hw-sb-children" },
+					device.sessions && device.sessions.length ? device.sessions.map(function (session) {
+						var title = session.title || (session.id ? session.id.slice(0, 24) + "…" : "?");
+						return h("button", { key: session.id, className: "hw-sb-leaf", title: "点开在窗口内打开该设备 dsh\n" + session.id + "\n更新 " + fmtTime(session.fileModifiedMs), onClick: function () { fleetOpenDevice({ id: device.id, name: device.name, origin: device.origin }); } },
+							h("span", { className: "hw-sb-dot", style: { background: "#a78bfa" } }),
+							h("span", { className: "hw-sb-name" }, String(title).slice(0, 90)),
+							h("span", { className: "hw-sb-count" }, fmtTime(session.fileModifiedMs).slice(5, 16)));
+					}) : h("div", { className: "hw-sb-empty" }, !device.online ? "设备不可达" : device.hasToken ? "该设备暂无会话" : "未配令牌,无法读取会话"))
+				: null);
+		});
+
+		return h("div", { className: "hw-sbtree" },
+			h("style", null, CSS),
+			h("div", { className: "hw-sb-head" }, "工作区", model ? h("span", { className: "hw-sb-count" }, "刷新 " + fmtTime(model.at).slice(5, 16)) : null),
+			localRows.length ? localRows : h("div", { className: "hw-sb-empty" }, "暂无本机会话"),
+			h("div", { className: "hw-sb-head" }, "远程设备"),
+			remoteRows.length ? remoteRows : h("div", { className: "hw-sb-empty" }, "未配置远程设备(设置 → Harness Fleet 添加)"));
+	}
+
 	function apply(ctx) {
+		fleetStore.services = {
+			sessions: ctx.get("sessions"),
+			workspaces: ctx.get("workspaces"),
+			layout: ctx.get("layout"),
+		};
+		ctx.slots.inject("sidebar.workspaces", function () {
+			return ctx.slots.register({ name: "sidebar.workspaces" }, function (ownerProps) { return h(FleetWorkspaceBrowser, ownerProps); });
+		});
 		ctx.slots.inject("settings.section", function () {
 			var off = ctx.slots.register({
 				name: "settings.section",
