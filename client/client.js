@@ -865,8 +865,8 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 				osc.frequency.linearRampToValueAtTime(430, t0 + 0.55);
 				var gain = ctx.createGain();
 				gain.gain.setValueAtTime(0.0001, t0);
-				gain.gain.exponentialRampToValueAtTime(0.42, t0 + 0.06);
-				gain.gain.exponentialRampToValueAtTime(0.35, t0 + 0.3);
+				gain.gain.exponentialRampToValueAtTime(0.63, t0 + 0.06);
+				gain.gain.exponentialRampToValueAtTime(0.52, t0 + 0.3);
 				gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.95);
 				var lfo = ctx.createOscillator();
 				lfo.type = "sine";
