@@ -832,8 +832,15 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 	var dockFreshFallback = {}; // scopeKey -> last fallback attempt ts
 	var remoteFreshCooldown = {}; // scopeKey -> ms until next direct /fresh retry
 	var audioCtx = null;
+	var audioComp = null;
 	var audioUnlocked = false;
 	var lastChimeAt = 0;
+	var fleetVolume = 1.0; // 0.05 .. 3.0 (5%..300%)
+	try {
+		var storedVolume = Number(window.localStorage.getItem("dsh-fleet.volume.v1"));
+		if (storedVolume >= 0.05 && storedVolume <= 3) fleetVolume = storedVolume;
+	}
+	catch (e) { /* ignore */ }
 	function ensureAudio() {
 		if (audioCtx) return audioCtx;
 		try {
@@ -842,6 +849,23 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 		}
 		catch (e) { /* unsupported */ }
 		return audioCtx;
+	}
+	function ensureOutput() {
+		var ctx = ensureAudio();
+		if (!ctx) return null;
+		if (!audioComp) {
+			try {
+				audioComp = ctx.createDynamicsCompressor();
+				audioComp.connect(ctx.destination);
+			}
+			catch (e) { audioComp = null; }
+		}
+		return audioComp || ctx.destination;
+	}
+	function setFleetVolume(value) {
+		var v = Math.max(0.05, Math.min(3, Number(value) || 1));
+		fleetVolume = v;
+		try { window.localStorage.setItem("dsh-fleet.volume.v1", String(v)); } catch (e) { /* ignore */ }
 	}
 	function unlockAudio() {
 		audioUnlocked = true;
@@ -864,9 +888,10 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 				osc.frequency.linearRampToValueAtTime(940, t0 + 0.15);
 				osc.frequency.linearRampToValueAtTime(430, t0 + 0.55);
 				var gain = ctx.createGain();
+				var vol = fleetVolume;
 				gain.gain.setValueAtTime(0.0001, t0);
-				gain.gain.exponentialRampToValueAtTime(0.63, t0 + 0.06);
-				gain.gain.exponentialRampToValueAtTime(0.52, t0 + 0.3);
+				gain.gain.exponentialRampToValueAtTime(0.63 * vol, t0 + 0.06);
+				gain.gain.exponentialRampToValueAtTime(0.52 * vol, t0 + 0.3);
 				gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.95);
 				var lfo = ctx.createOscillator();
 				lfo.type = "sine";
@@ -874,7 +899,7 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 				var lfoGain = ctx.createGain();
 				lfoGain.gain.value = 30;
 				lfo.connect(lfoGain).connect(osc.frequency);
-				osc.connect(gain).connect(ctx.destination);
+				osc.connect(gain).connect(ensureOutput());
 				osc.start(t0);
 				lfo.start(t0);
 				osc.stop(t0 + 1.0);
@@ -994,6 +1019,9 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 		var viewportState = React.useState({ w: 1280, h: 800 });
 		var viewport = viewportState[0];
 		var setViewport = viewportState[1];
+		var volumePair = React.useState(Math.round(fleetVolume * 100));
+		var volPct = volumePair[0];
+		var setVolPct = volumePair[1];
 
 		React.useEffect(function () {
 			var measure = function () { setViewport({ w: window.innerWidth || 1280, h: window.innerHeight || 800 }); };
@@ -1131,8 +1159,15 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 		var entries = [{ id: "local", name: "本机" }];
 		if (devices) devices.forEach(function (device) { entries.push({ id: device.id, name: device.name || device.origin, origin: device.origin }); });
 
-		var body = h("div", { className: "hw-dock-body" }, entries.map(cardFor),
-			h("div", { className: "hw-dock-empty", style: { fontSize: 11 } }, (!devices || devices.length === 0) ? "未配置远程设备(设置 → Harness Fleet 添加)" : "状态 4s 刷新 · 点卡片切换 · 完成有提示音"));
+		var volRow = dockOpen ? h("div", { style: { display: "flex", alignItems: "center", gap: "8px", fontSize: 11, padding: "2px 0", flex: "0 0 auto" } },
+			h("span", { style: { flex: "0 0 auto", whiteSpace: "nowrap" } }, "提示音 " + volPct + "%"),
+			h("input", { type: "range", min: 5, max: 300, step: 5, value: volPct, style: { flex: "1", minWidth: 0 }, onChange: function (e) { var v = Number(e.target.value); setVolPct(v); setFleetVolume(v / 100); } }),
+			h("span", { style: { flex: "0 0 auto", opacity: 0.7 } }, "≤300%")) : null;
+
+		var body = h("div", { className: "hw-dock-body" },
+			volRow,
+			entries.map(cardFor),
+			h("div", { className: "hw-dock-empty", style: { fontSize: 11 } }, (!devices || devices.length === 0) ? "未配置远程设备(设置 → Harness Fleet 添加)" : "状态 4s 刷新 · 点卡片切换 · 完成响猫叫"));
 
 		/* Numeric pixel sizing (immune to CSS stretch quirks for replaced iframes). */
 		var barW = dockOpen ? DOCK_W : 44;
