@@ -774,19 +774,19 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 		".hw-spin{width:12px;height:12px;border-radius:50%;border:2px solid rgba(255,255,255,.22);border-top-color:#22c55e;display:inline-block;flex:0 0 auto;animation:hwRotate .8s linear infinite}",
 		"@keyframes hwRotate{to{transform:rotate(360deg)}}",
 		".hw-dock{position:fixed;top:0;bottom:0;right:0;z-index:2147483600;background:#101318;color:#e7e7ea;display:flex;flex-direction:column;border-left:1px solid rgba(255,255,255,.1)}",
-		".hw-dock-head{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:8px 10px;border-bottom:1px solid rgba(255,255,255,.08);font-weight:600;font-size:13px}",
-		".hw-dock-toggle{border:1px solid rgba(255,255,255,.2);background:transparent;color:inherit;border-radius:6px;padding:2px 8px;cursor:pointer;font-size:11px}",
-		".hw-dock-body{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:8px;padding:8px}",
-		".hw-card{border:1px solid rgba(255,255,255,.14);border-radius:10px;background:rgba(255,255,255,.03);padding:8px 10px;cursor:pointer;text-align:left;color:inherit;display:flex;flex-direction:column;gap:4px;width:100%}",
+		".hw-dock-head{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:8px 10px;border-bottom:1px solid rgba(255,255,255,.08);font-weight:600;font-size:13px;box-sizing:border-box}",
+		".hw-dock-toggle{border:1px solid rgba(255,255,255,.2);background:transparent;color:inherit;border-radius:6px;padding:2px 8px;cursor:pointer;font-size:11px;box-sizing:border-box}",
+		".hw-dock-body{flex:1;overflow-y:auto;overflow-x:hidden;display:flex;flex-direction:column;gap:8px;padding:8px;box-sizing:border-box;min-width:0}",
+		".hw-card{border:1px solid rgba(255,255,255,.14);border-radius:10px;background:rgba(255,255,255,.03);padding:8px 10px;cursor:pointer;text-align:left;color:inherit;display:flex;flex-direction:column;gap:4px;width:100%;max-width:100%;min-width:0;box-sizing:border-box}",
 		".hw-card:hover{background:rgba(255,255,255,.07)}",
 		".hw-card-active{border-color:#2563eb;box-shadow:0 0 0 1px #2563eb inset}",
-		".hw-card-row{display:flex;align-items:center;gap:8px;min-width:0}",
-		".hw-card-name{font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
-		".hw-card-sub{font-size:11px;opacity:.65;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+		".hw-card-row{display:flex;align-items:center;gap:8px;min-width:0;max-width:100%}",
+		".hw-card-name{font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1 1 auto;min-width:0}",
+		".hw-card-sub{font-size:11px;opacity:.65;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1 1 auto;min-width:0}",
 		".hw-card-status{font-size:11px;margin-left:auto;flex:0 0 auto;color:#22c55e}",
 		".hw-card-status.busy{color:#22c55e}",
-		".hw-card-actions{display:flex;justify-content:flex-end;gap:6px;padding-top:2px}",
-		".hw-dock-mini{border:1px solid rgba(255,255,255,.22);background:transparent;color:inherit;border-radius:6px;padding:2px 8px;cursor:pointer;font-size:10px;line-height:1.4}",
+		".hw-card-actions{display:flex;justify-content:flex-end;gap:6px;padding-top:2px;min-width:0;flex:0 0 auto}",
+		".hw-dock-mini{border:1px solid rgba(255,255,255,.22);background:transparent;color:inherit;border-radius:6px;padding:2px 8px;cursor:pointer;font-size:10px;line-height:1.4;box-sizing:border-box;white-space:nowrap;flex:0 0 auto}",
 		".hw-dock-mini:hover{background:rgba(255,255,255,.1)}",
 		".hw-dock-mini-disabled{opacity:.4;cursor:not-allowed}",
 		".hw-dock-empty{padding:14px 8px;font-size:12px;opacity:.6;text-align:center}",
@@ -1306,6 +1306,17 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 			});
 			// eslint-disable-next-line react-hooks/exhaustive-deps
 		}, [activeOriginNow]);
+
+		/* If the saved/current dock width would overflow the window (e.g. it was
+		   widened on a big screen), clamp it back into view and remember that. */
+		React.useEffect(function () {
+			var maxAllowed = Math.max(DOCK_W_MIN, Math.min(DOCK_W_MAX, (viewport.w || 1280) - 24));
+			if (dockW > maxAllowed) {
+				setDockW(maxAllowed);
+				persistDockW(maxAllowed);
+			}
+			// eslint-disable-next-line react-hooks/exhaustive-deps
+		}, [viewport.w]);
 
 		/* Keyboard isolation: while a remote device view is open, keyboard events
 		   must only reach that machine's iframe — never the local DSH underneath
