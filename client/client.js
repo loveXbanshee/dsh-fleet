@@ -729,7 +729,14 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 		".hw-tab{background:transparent;color:inherit;border:1px solid rgba(255,255,255,.16);border-radius:8px;padding:3px 12px;font-size:12px;cursor:pointer;white-space:nowrap;flex:0 0 auto}",
 		".hw-tab:hover{background:rgba(255,255,255,.08)}",
 		".hw-tab-active{background:#2563eb;border-color:#2563eb;color:#fff}",
-		".hw-remotehost{position:fixed;top:34px;left:0;right:0;bottom:0;z-index:2147483400;display:flex;flex-direction:column;background:#0f1115}"
+		".hw-remotehost{position:fixed;top:34px;left:0;right:0;bottom:0;z-index:2147483400;display:flex;flex-direction:column;background:#0f1115}",
+		".hw-mon{position:fixed;top:42px;right:12px;z-index:2147483600;display:flex;flex-direction:column;gap:6px;align-items:flex-end;pointer-events:none}",
+		".hw-mon-item{display:inline-flex;align-items:center;gap:6px;background:rgba(15,17,21,.82);border:1px solid rgba(255,255,255,.12);color:#e7e7ea;border-radius:999px;padding:3px 10px 3px 8px;font-size:12px;box-shadow:0 2px 8px rgba(0,0,0,.25)}",
+		".hw-mon-dot{width:9px;height:9px;border-radius:50%;display:inline-block;flex:0 0 auto}",
+		".hw-mon-ok{color:#22c55e;font-weight:700;font-size:13px;line-height:1}",
+		".hw-mon-name{white-space:nowrap;max-width:160px;overflow:hidden;text-overflow:ellipsis}",
+		".hw-spin{width:12px;height:12px;border-radius:50%;border:2px solid rgba(255,255,255,.22);border-top-color:#22c55e;display:inline-block;flex:0 0 auto;animation:hwRotate .8s linear infinite}",
+		"@keyframes hwRotate{to{transform:rotate(360deg)}}"
 	].join("\n");
 
 	/* ---------------- cross-component fleet store ---------------- */
@@ -805,6 +812,136 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 		return h("div", null, h("style", null, CSS), bar, content);
 	}
 
+	/* ---------------- always-on running/completed monitor (+ sound) ---------------- */
+	var monitorPrev = {};      // scopeKey -> { busy:boolean, finishedAt:number }
+	var audioCtx = null;
+	var audioUnlocked = false;
+	var lastChimeAt = 0;
+	function ensureAudio() {
+		if (audioCtx) return audioCtx;
+		try {
+			var Ctx = window.AudioContext || window.webkitAudioContext;
+			if (Ctx) audioCtx = new Ctx();
+		}
+		catch (e) { /* unsupported */ }
+		return audioCtx;
+	}
+	function playChime() {
+		var ctx = ensureAudio();
+		if (!ctx || !audioUnlocked) return;
+		var now = Date.now();
+		if (now - lastChimeAt < 12000) return;
+		lastChimeAt = now;
+		try {
+			var notes = [880, 1318.5];
+			notes.forEach(function (freq, index) {
+				var osc = ctx.createOscillator();
+				var gain = ctx.createGain();
+				osc.type = "sine";
+				osc.frequency.value = freq;
+				var t0 = ctx.currentTime + index * 0.12;
+				gain.gain.setValueAtTime(0.0001, t0);
+				gain.gain.exponentialRampToValueAtTime(0.12, t0 + 0.02);
+				gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.35);
+				osc.connect(gain).connect(ctx.destination);
+				osc.start(t0);
+				osc.stop(t0 + 0.4);
+			});
+		}
+		catch (e) { /* ignore */ }
+	}
+
+	function FleetMonitor() {
+		var statusState = React.useState({}); // scopeKey -> { busy, finished, offline }
+		var statuses = statusState[0];
+		var setStatuses = statusState[1];
+		var devicesState = React.useState(null);
+		var devices = devicesState[0];
+		var setDevices = devicesState[1];
+
+		React.useEffect(function () {
+			var unlock = function () { audioUnlocked = true; try { if (audioCtx && audioCtx.state === "suspended") audioCtx.resume(); } catch (e) { /* ignore */ } };
+			window.addEventListener("pointerdown", unlock, { once: true });
+			window.addEventListener("keydown", unlock, { once: true });
+			var alive = true;
+			var timer = null;
+			var scopes = null;
+			async function tick() {
+				var nextDevices = null;
+				try {
+					var st = await get("state");
+					nextDevices = st.remote || [];
+					setDevices(nextDevices);
+				}
+				catch (e) { /* keep */ }
+				if (!scopes || (nextDevices && nextDevices.length !== scopes.remote.length)) {
+					scopes = { local: true, remote: nextDevices ? nextDevices.length : 0 };
+				}
+				var probes = [];
+				var names = { local: "本机" };
+				var fetchNewest = function (kind, remote) {
+					var url = kind === "local" ? "local-fresh" : "remote-fresh?remote=" + encodeURIComponent(remote.id);
+					return get(url).then(function (payload) { return { kind: kind, id: kind === "local" ? "local" : remote.id, name: kind === "local" ? "本机" : (remote.name || remote.origin), newest: payload.newestLocal || 0 }; })
+						.catch(function () { return { kind: kind, id: kind === "local" ? "local" : remote.id, name: kind === "local" ? "本机" : (remote.name || remote.origin), newest: null }; });
+				};
+				probes.push(fetchNewest("local", null));
+				if (nextDevices) {
+					nextDevices.forEach(function (remote) { probes.push(fetchNewest("remote", remote)); });
+				}
+				return Promise.all(probes).then(function (results) {
+					if (!alive) return;
+					var next = {};
+					var chime = false;
+					results.forEach(function (probe) {
+						if (probe.newest == null) {
+							next[probe.id] = { busy: false, finished: false, offline: probe.kind === "remote" };
+							return;
+						}
+						var busy = (Date.now() - probe.newest) < 45000;
+						var prev = monitorPrev[probe.id];
+						if (prev && prev.busy && !busy) {
+							prev.finishedAt = Date.now();
+							chime = true;
+						}
+						var finishedRecent = !!prev && prev.finishedAt && (Date.now() - prev.finishedAt) < 8000;
+						monitorPrev[probe.id] = prev ? { busy: busy, finishedAt: prev.finishedAt || 0 } : { busy: busy, finishedAt: 0 };
+						next[probe.id] = { busy: busy, finished: finishedRecent, offline: false, name: probe.name };
+					});
+					setStatuses(next);
+					if (chime) playChime();
+				}).catch(function () { /* ignore */ });
+			}
+			tick();
+			timer = setInterval(tick, 4000);
+			return function () {
+				alive = false;
+				if (timer) clearInterval(timer);
+				window.removeEventListener("pointerdown", unlock);
+				window.removeEventListener("keydown", unlock);
+			};
+		}, []);
+
+		var keys = Object.keys(statuses);
+		if (keys.length === 0 && !devices) return null;
+		var items = [];
+		if (statuses.local) items.push(statuses.local);
+		if (devices) devices.forEach(function (d) { if (statuses[d.id]) items.push(statuses[d.id]); });
+		if (items.length === 0) return null;
+		return h("div", { className: "hw-mon" },
+			h("style", null, CSS),
+			items.map(function (status, index) {
+				var indicator = null;
+				var label = status.name || "?";
+				if (status.offline) indicator = h("span", { className: "hw-mon-dot", style: { background: "#9ca3af" } });
+				else if (status.busy) indicator = h("span", { className: "hw-spin" });
+				else if (status.finished) indicator = h("span", { className: "hw-mon-ok" }, "✓");
+				else indicator = h("span", { className: "hw-mon-dot", style: { background: "#22c55e" } });
+				return h("div", { key: "m" + index, className: "hw-mon-item", title: label + (status.busy ? " · 运行中" : status.finished ? " · 刚完成" : status.offline ? " · 离线" : " · 空闲") },
+					indicator,
+					h("span", { className: "hw-mon-name" }, label));
+			}));
+	}
+
 	function apply(ctx) {
 		ctx.slots.inject("settings.section", function () {
 			var off = ctx.slots.register({
@@ -814,6 +951,14 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 				label: function () { return SECTION_LABEL; },
 			}, function (ownerProps) { return h(Workbench, {}); });
 			return off;
+		});
+		ctx.slots.inject("shell.overlay", function () {
+			return ctx.slots.register({
+				name: "shell.overlay",
+				id: "fleet-monitor",
+				order: 6,
+				label: function () { return "Fleet 运行监测"; },
+			}, function () { return h(FleetMonitor, {}); });
 		});
 		ctx.slots.inject("shell.overlay", function () {
 			return ctx.slots.register({
