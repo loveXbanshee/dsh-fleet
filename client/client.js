@@ -728,7 +728,7 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 	].join("\n");
 
 	/* ---------------- cross-component fleet store ---------------- */
-	var fleetStore = { open: false, device: null, listeners: [], services: null };
+	var fleetStore = { open: false, device: null, listeners: [], services: null, mainLeft: null };
 	function fleetNotify() {
 		for (var i = 0; i < fleetStore.listeners.length; i += 1) { try { fleetStore.listeners[i](); } catch (e) { /* ignore */ } }
 	}
@@ -784,9 +784,12 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 			return function () { alive = false; clearInterval(timer); };
 		}, [store.open]);
 		if (!store.open) return null;
+		var overlayStyle = store.mainLeft != null
+			? { left: store.mainLeft + "px", right: "0px", top: "0px", bottom: "0px" }
+			: null;
 		var bar = h("div", { className: "hw-overlay-bar" },
 			h("button", { className: "hw-btn", onClick: fleetClose }, "✕ 返回本机"),
-			h("span", { className: "hw-overlay-title" }, "远程 dsh(窗口内)"),
+			h("span", { className: "hw-overlay-title" }, "远程 dsh(右侧内容区)"),
 			h("div", { className: "hw-chipbar hw-chipbar-inline" },
 				(devices || []).map(function (remote) {
 					return h(FleetChip, { key: remote.id, device: remote, activity: null, onClick: function () { fleetPickDevice({ id: remote.id, name: remote.name, origin: remote.origin }); } });
@@ -801,7 +804,7 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 		else {
 			body = h("div", { className: "hw-overlay-empty" }, err ? ("加载失败: " + err) : "暂无已配置的远程设备 — 请到 设置 → Harness Fleet 添加并配置令牌");
 		}
-		return h("div", { className: "hw-overlay" }, h("style", null, CSS), bar, body);
+		return h("div", { className: "hw-overlay", style: overlayStyle }, h("style", null, CSS), bar, body);
 	}
 
 	/* ---------------- composite sidebar: local workspaces + remote tree ---------------- */
@@ -815,6 +818,34 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 		var openState = React.useState({});
 		var opened = openState[0];
 		var setOpened = openState[1];
+
+		/* Track this sidebar node's right edge so the remote pane only covers
+		   the main content area (left sidebar stays visible & clickable). */
+		var hostNodeState = React.useState(null);
+		var hostNode = hostNodeState[0];
+		var setHostNode = hostNodeState[1];
+		React.useEffect(function () {
+			if (!hostNode || !wide) return;
+			var measure = function () {
+				try {
+					var rect = hostNode.getBoundingClientRect();
+					var nextLeft = Math.max(0, Math.round(rect.right));
+					if (fleetStore.mainLeft !== nextLeft) {
+						fleetStore.mainLeft = nextLeft;
+						fleetNotify();
+					}
+				}
+				catch (e) { /* ignore */ }
+			};
+			measure();
+			window.addEventListener("resize", measure);
+			var observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(measure) : null;
+			if (observer) observer.observe(hostNode);
+			return function () {
+				window.removeEventListener("resize", measure);
+				if (observer) observer.disconnect();
+			};
+		}, [hostNode, wide]);
 
 		function toggleOpen(key) {
 			setOpened(function (prev) {
@@ -878,7 +909,10 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 
 		function openLocalSession(id) {
 			var svc = fleetStore.services && fleetStore.services.sessions;
-			if (svc && typeof svc.open === "function") { try { svc.open(id); } catch (e) { /* ignore */ } }
+			if (svc && typeof svc.open === "function") {
+				try { svc.open(id); } catch (e) { /* ignore */ }
+				fleetClose(); // opening a local session leaves the remote pane
+			}
 		}
 
 		if (!wide) {
@@ -931,7 +965,7 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 				: null);
 		});
 
-		return h("div", { className: "hw-sbtree" },
+		return h("div", { className: "hw-sbtree", ref: setHostNode },
 			h("style", null, CSS),
 			h("div", { className: "hw-sb-head" }, "工作区", model ? h("span", { className: "hw-sb-count" }, "刷新 " + fmtTime(model.at).slice(5, 16)) : null),
 			localRows.length ? localRows : h("div", { className: "hw-sb-empty" }, "暂无本机会话"),
