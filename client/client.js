@@ -842,29 +842,38 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 		catch (e) { /* unsupported */ }
 		return audioCtx;
 	}
+	function unlockAudio() {
+		audioUnlocked = true;
+		var ctx = ensureAudio();
+		if (ctx && ctx.state === "suspended") { try { ctx.resume(); } catch (e) { /* ignore */ } }
+	}
 	function playChime() {
 		var ctx = ensureAudio();
 		if (!ctx || !audioUnlocked) return;
 		var now = Date.now();
 		if (now - lastChimeAt < 12000) return;
 		lastChimeAt = now;
-		try {
-			var notes = [880, 1318.5];
-			notes.forEach(function (freq, index) {
-				var osc = ctx.createOscillator();
-				var gain = ctx.createGain();
-				osc.type = "sine";
-				osc.frequency.value = freq;
-				var t0 = ctx.currentTime + index * 0.12;
-				gain.gain.setValueAtTime(0.0001, t0);
-				gain.gain.exponentialRampToValueAtTime(0.12, t0 + 0.02);
-				gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.35);
-				osc.connect(gain).connect(ctx.destination);
-				osc.start(t0);
-				osc.stop(t0 + 0.4);
-			});
-		}
-		catch (e) { /* ignore */ }
+		var fire = function () {
+			try {
+				var notes = [880, 1318.5];
+				notes.forEach(function (freq, index) {
+					var osc = ctx.createOscillator();
+					var gain = ctx.createGain();
+					osc.type = "sine";
+					osc.frequency.value = freq;
+					var t0 = ctx.currentTime + index * 0.12;
+					gain.gain.setValueAtTime(0.0001, t0);
+					gain.gain.exponentialRampToValueAtTime(0.12, t0 + 0.02);
+					gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.35);
+					osc.connect(gain).connect(ctx.destination);
+					osc.start(t0);
+					osc.stop(t0 + 0.4);
+				});
+			}
+			catch (e) { /* ignore */ }
+		};
+		if (ctx.state === "suspended") { ctx.resume().then(fire).catch(function () { /* ignore */ }); }
+		else fire();
 	}
 
 	function FleetMonitor() {
@@ -876,7 +885,7 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 		var setDevices = devicesState[1];
 
 		React.useEffect(function () {
-			var unlock = function () { audioUnlocked = true; try { if (audioCtx && audioCtx.state === "suspended") audioCtx.resume(); } catch (e) { /* ignore */ } };
+			var unlock = unlockAudio;
 			window.addEventListener("pointerdown", unlock, { once: true });
 			window.addEventListener("keydown", unlock, { once: true });
 			var alive = true;
@@ -974,7 +983,7 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 		var dockWidth = dockOpen ? DOCK_W : 44;
 
 		React.useEffect(function () {
-			var unlock = function () { audioUnlocked = true; try { if (audioCtx && audioCtx.state === "suspended") audioCtx.resume(); } catch (e) { /* ignore */ } };
+			var unlock = unlockAudio;
 			window.addEventListener("pointerdown", unlock, { once: true });
 			window.addEventListener("keydown", unlock, { once: true });
 			var alive = true;
@@ -1085,6 +1094,9 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 		var entries = [{ id: "local", name: "本机" }];
 		if (devices) devices.forEach(function (device) { entries.push({ id: device.id, name: device.name || device.origin, origin: device.origin }); });
 
+		// Without remotes, hide the dock UI entirely but keep monitoring/sound running.
+		if (!devices || devices.length === 0) return null;
+
 		var body = dockOpen
 			? h("div", { className: "hw-dock-body" }, entries.map(cardFor),
 				h("div", { className: "hw-dock-empty", style: { fontSize: 11 } }, "状态 4s 刷新 · 点卡片切换 · 完成有提示音"))
@@ -1115,13 +1127,41 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 			}, function (ownerProps) { return h(Workbench, {}); });
 			return off;
 		});
-		ctx.slots.inject("shell.overlay", function () {
-			return ctx.slots.register({
-				name: "shell.overlay",
-				id: "fleet-dock",
-				order: 5,
-				label: function () { return "Fleet 设备栏"; },
-			}, function () { return h(FleetDock, {}); });
+
+		// The shell.overlay slot constrains occupants to a small host box, so the
+		// device dock + remote pane are mounted directly on <body> to guarantee a
+		// true full-viewport layer.
+		var mounted = { root: null, host: null };
+		function mountBodyDock() {
+			try {
+				var ReactDOM = require("react-dom");
+				var host = document.createElement("div");
+				host.style.cssText = "position:fixed;inset:0;pointer-events:none;z-index:2147483300";
+				document.body.appendChild(host);
+				mounted.host = host;
+				ReactDOM.render(h(React.createElement(FleetDock, {})), host);
+				mounted.root = ReactDOM;
+			}
+			catch (error) {
+				console.error("[dsh-fleet] dock mount failed:", error);
+			}
+		}
+		if (typeof document !== "undefined") {
+			if (document.body) mountBodyDock();
+			else document.addEventListener("DOMContentLoaded", mountBodyDock, { once: true });
+		}
+		ctx.effect(function () {
+			return function () {
+				try {
+					if (mounted.host && mounted.root && typeof mounted.root.unmountComponentAtNode === "function") {
+						mounted.root.unmountComponentAtNode(mounted.host);
+					}
+					if (mounted.host && mounted.host.parentNode) mounted.host.parentNode.removeChild(mounted.host);
+				}
+				catch (e) { /* ignore */ }
+				mounted.host = null;
+				mounted.root = null;
+			};
 		});
 	}
 
