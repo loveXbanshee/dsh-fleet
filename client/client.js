@@ -68,6 +68,28 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 		});
 	}
 
+	/* ---- warm the TCP/TLS connection to remote dsh origins so the first
+	   embedded iframe open skips the handshake round-trips ---- */
+	var preconnectedOrigins = {};
+	function preconnectOrigin(origin) {
+		if (!origin || preconnectedOrigins[origin] || typeof document === "undefined" || !document.head) return;
+		preconnectedOrigins[origin] = true;
+		try {
+			var link = document.createElement("link");
+			link.rel = "preconnect";
+			link.href = origin;
+			document.head.appendChild(link);
+			var dns = document.createElement("link");
+			dns.rel = "dns-prefetch";
+			dns.href = origin;
+			document.head.appendChild(dns);
+		}
+		catch (e) { /* ignore */ }
+	}
+	function preconnectAll(origins) {
+		(origins || []).forEach(preconnectOrigin);
+	}
+
 	/* ---------------- tiny UI helpers ---------------- */
 	function btn(label, onClick, extra, disabled) {
 		var props = { type: "button", onClick: onClick, className: "hw-btn", disabled: !!disabled };
@@ -1022,6 +1044,12 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 		var volumePair = React.useState(Math.round(fleetVolume * 100));
 		var volPct = volumePair[0];
 		var setVolPct = volumePair[1];
+		/* Remote iframes stay alive (hidden) once opened, so switching back is
+		   instant — like a warm browser tab instead of a cold reload. */
+		var FRAME_POOL_MAX = 3;
+		var framesState = React.useState([]); // [{origin,name}] most-recent-first
+		var openedFrames = framesState[0];
+		var setOpenedFrames = framesState[1];
 
 		React.useEffect(function () {
 			var measure = function () { setViewport({ w: window.innerWidth || 1280, h: window.innerHeight || 800 }); };
@@ -1038,6 +1066,7 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 					var st = await get("state");
 					remoteList = st.remote || [];
 					setDevices(remoteList);
+					preconnectAll(remoteList.map(function (r) { return r.origin; }));
 				}
 				catch (e) { /* keep */ }
 				var probes = [];
@@ -1123,6 +1152,21 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 
 		var showRemote = store.open && !!store.device;
 		var activeDevice = store.device;
+		var activeOriginNow = (showRemote && activeDevice && activeDevice.origin) || null;
+
+		/* Keep a small pool of mounted remote iframes (LRU, most-recent-first).
+		   The current device's origin is ensured present so its frame renders;
+		   hidden ones stay alive for instant switch-back. */
+		React.useEffect(function () {
+			if (!activeOriginNow) return;
+			setOpenedFrames(function (prev) {
+				var next = prev.filter(function (f) { return f.origin !== activeOriginNow; });
+				next.unshift({ origin: activeOriginNow, name: (activeDevice && activeDevice.name) || activeOriginNow });
+				if (next.length > FRAME_POOL_MAX) next.length = FRAME_POOL_MAX;
+				return next;
+			});
+			// eslint-disable-next-line react-hooks/exhaustive-deps
+		}, [activeOriginNow]);
 
 		function cardFor(entry) {
 			var s = statuses[entry.id] || { online: true, hasToken: true };
@@ -1173,12 +1217,21 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 		var barW = dockOpen ? DOCK_W : 44;
 		var frameW = Math.max(0, viewport.w - barW - 1);
 		var dockStyle = { position: "fixed", top: "0px", right: "0px", width: barW + "px", height: viewport.h + "px", pointerEvents: "auto", background: "#101318", color: "#e7e7ea", borderLeft: "1px solid rgba(255,255,255,.1)", display: "flex", flexDirection: "column", boxSizing: "border-box" };
-		var layer = null;
-		if (showRemote && activeDevice) {
-			var frameStyle = { position: "fixed", top: "0px", left: "0px", width: frameW + "px", height: viewport.h + "px", border: "0", background: "#fff", display: "block", pointerEvents: "auto", zIndex: 1 };
-			layer = h("iframe", { key: activeDevice.origin, src: activeDevice.origin, style: frameStyle, title: activeDevice.name || "remote dsh", allow: "clipboard-read; clipboard-write; fullscreen" });
+		/* Frame pool: opened remote dsh stay mounted (hidden when not active).
+		   Reuses one iframe per origin via stable key → switching is instant. */
+		var activeOrigin = (showRemote && activeDevice && activeDevice.origin) || null;
+		var poolList = openedFrames.slice();
+		if (activeOrigin && !poolList.some(function (f) { return f.origin === activeOrigin; })) {
+			poolList.unshift({ origin: activeOrigin, name: (activeDevice && activeDevice.name) || activeOrigin });
 		}
-		return h("div", null, h("style", null, CSS), layer, h("div", { style: dockStyle }, head, body));
+		var frameNodes = poolList.map(function (frame) {
+			var isActive = frame.origin === activeOrigin;
+			var style = isActive
+				? { position: "fixed", top: "0px", left: "0px", width: frameW + "px", height: viewport.h + "px", border: "0", background: "#fff", display: "block", pointerEvents: "auto", zIndex: 1 }
+				: { position: "fixed", top: "0px", left: "0px", width: "1px", height: "1px", border: "0", display: "none", pointerEvents: "none", zIndex: -1, visibility: "hidden" };
+			return h("iframe", { key: frame.origin, src: frame.origin, style: style, title: frame.name || "remote dsh", allow: "clipboard-read; clipboard-write; fullscreen" });
+		});
+		return h("div", null, h("style", null, CSS), frameNodes, h("div", { style: dockStyle }, head, body));
 	}
 
 	function apply(ctx) {
