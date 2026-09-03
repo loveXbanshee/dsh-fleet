@@ -828,6 +828,8 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 
 	/* ---------------- always-on running/completed monitor (+ sound) ---------------- */
 	var monitorPrev = {};      // scopeKey -> { busy:boolean, finishedAt:number }
+	var dockFreshCache = {};   // scopeKey -> { newest, at } for old-remote fallback
+	var dockFreshFallback = {}; // scopeKey -> last fallback attempt ts
 	var audioCtx = null;
 	var audioUnlocked = false;
 	var lastChimeAt = 0;
@@ -994,9 +996,27 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 				if (remoteList) {
 					remoteList.forEach(function (remote) {
 						probes.push(get("remote-fresh?remote=" + encodeURIComponent(remote.id)).then(function (p) {
-							return { id: remote.id, name: remote.name || remote.origin, origin: remote.origin, online: remote.online, hasToken: !!remote.hasToken, newest: p.newestLocal || 0, err: null };
-						}).catch(function (e2) {
-							return { id: remote.id, name: remote.name || remote.origin, origin: remote.origin, online: remote.online, hasToken: !!remote.hasToken, newest: 0, err: String((e2 && e2.message) || e2) };
+							dockFreshCache[remote.id] = { newest: p.newestLocal || 0, at: Date.now() };
+							return { id: remote.id, name: remote.name || remote.origin, origin: remote.origin, online: remote.online, hasToken: !!remote.hasToken, newest: p.newestLocal || 0, err: null, degraded: false };
+						}).catch(function () {
+							// Old remote (<0.10) lacks /fresh: degrade via cached value or a throttled sessions fallback.
+							var cached = dockFreshCache[remote.id];
+							var now = Date.now();
+							if (cached && now - cached.at < 120000) {
+								return { id: remote.id, name: remote.name || remote.origin, origin: remote.origin, online: remote.online, hasToken: !!remote.hasToken, newest: cached.newest, err: null, degraded: true };
+							}
+							if (now - (dockFreshFallback[remote.id] || 0) < 20000) {
+								return { id: remote.id, name: remote.name || remote.origin, origin: remote.origin, online: remote.online, hasToken: !!remote.hasToken, newest: 0, err: "读取失败(重试间隔中)", degraded: true };
+							}
+							dockFreshFallback[remote.id] = now;
+							return get("remote-sessions?remote=" + encodeURIComponent(remote.id)).then(function (s) {
+								var newest = 0;
+								(s.sessions || []).forEach(function (x) { if ((x.fileModifiedMs || 0) > newest) newest = x.fileModifiedMs; });
+								dockFreshCache[remote.id] = { newest: newest, at: Date.now() };
+								return { id: remote.id, name: remote.name || remote.origin, origin: remote.origin, online: remote.online, hasToken: !!remote.hasToken, newest: newest, err: null, degraded: true };
+							}).catch(function (e3) {
+								return { id: remote.id, name: remote.name || remote.origin, origin: remote.origin, online: remote.online, hasToken: !!remote.hasToken, newest: 0, err: String((e3 && e3.message) || e3) + " — 请把远端升级到 dsh-fleet ≥0.10", degraded: true };
+							});
 						}));
 					});
 				}
@@ -1070,14 +1090,19 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 				h("div", { className: "hw-dock-empty", style: { fontSize: 11 } }, "状态 4s 刷新 · 点卡片切换 · 完成有提示音"))
 			: null;
 
+		/* Full-viewport parent fixed; children laid out absolutely inside it so
+		   nothing depends on the overlay host's containing block. */
+		var boxStyle = { position: "fixed", inset: "0px", margin: "0", padding: "0", zIndex: 2147483300, pointerEvents: "none", background: "transparent" };
+		var dockStyle = { position: "absolute", top: "0px", right: "0px", bottom: "0px", width: dockWidth + "px", pointerEvents: "auto", background: "#101318", color: "#e7e7ea", borderLeft: "1px solid rgba(255,255,255,.1)", display: "flex", flexDirection: "column" };
 		var layer = null;
 		if (showRemote && activeDevice) {
-			var frameStyle = { position: "fixed", top: "0px", bottom: "0px", left: "0px", right: (dockWidth + 1) + "px", width: "auto", height: "auto", border: "0", background: "#fff", zIndex: 2147483400 };
+			var frameStyle = { position: "absolute", top: "0px", bottom: "0px", left: "0px", right: (dockWidth + 1) + "px", width: "auto", height: "auto", border: "0", background: "#fff" };
 			layer = h("iframe", { key: activeDevice.origin, src: activeDevice.origin, style: frameStyle, title: activeDevice.name || "remote dsh", allow: "clipboard-read; clipboard-write; fullscreen" });
 		}
-		return h("div", null, h("style", null, CSS),
+		return h("div", { style: boxStyle },
+			h("style", null, CSS),
 			layer,
-			h("div", { className: "hw-dock", style: { width: dockWidth + "px" } }, head, body));
+			h("div", { style: dockStyle }, head, body));
 	}
 
 	function apply(ctx) {
