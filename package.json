@@ -1,6 +1,6 @@
 {
   "name": "dsh-fleet",
-  "version": "0.13.4",
+  "version": "0.13.5",
   "description": "dsh-fleet — Punica Studio. A multi-harness fleet console for DeepSeek Harness Web: manage local + remote dsh instances from one place and read cross-device conversation history (token-gated), so past sessions never restart. 原名 dsh-harness-workbench。Harness Fleet：一个面板统管本机与多台远程 Harness 并可跨设备读取原有对话记录。",
   "type": "module",
   "main": "lib/index.js",
