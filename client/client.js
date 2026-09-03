@@ -763,58 +763,6 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 			busy ? h("span", { className: "hw-chip-flag" }, "运行中") : (activity && activity.justFinished ? h("span", { className: "hw-chip-flag" }, "✓") : null));
 	}
 
-	/** Always-visible sidebar footer strip: open remote view + per-device live dots. */
-	function FleetSide() {
-		var store = useFleetStore();
-		var remoteState = React.useState(null);
-		var remotes = remoteState[0];
-		var setRemotes = remoteState[1];
-		var actState = React.useState({});
-		var acts = actState[0];
-		var setActs = actState[1];
-		React.useEffect(function () {
-			var alive = true;
-			var timer = null;
-			function refresh() {
-				get("state").then(function (payload) {
-					if (!alive) return;
-					var list = payload.remote || [];
-					setRemotes(list);
-					var next = {};
-					var jobs = [];
-					list.forEach(function (remote) {
-						if (!remote.online || !remote.hasToken) {
-							next[remote.id] = { offline: !remote.online, busy: false, justFinished: false };
-							return;
-						}
-						jobs.push(get("remote-sessions?remote=" + encodeURIComponent(remote.id))
-							.then(function (page) {
-								var newest = 0;
-								(page.sessions || []).forEach(function (entry) { if ((entry.fileModifiedMs || 0) > newest) newest = entry.fileModifiedMs; });
-								var age = Date.now() - newest;
-								next[remote.id] = { busy: age < 45000, offline: false, justFinished: false };
-							})
-							.catch(function () { next[remote.id] = { busy: false, offline: true, justFinished: false }; }));
-					});
-					return Promise.all(jobs).then(function () { if (alive) setActs(next); }).catch(function () { if (alive) setActs(next); });
-				}).catch(function () { /* transient */ });
-			}
-			refresh();
-			timer = setInterval(refresh, 8000);
-			return function () { alive = false; if (timer) clearInterval(timer); };
-		}, []);
-
-		var openButton = h("button", { className: "hw-sidebtn", title: "在当前窗口内打开/切换远程 dsh", onClick: function () { fleetOpenDevice(null); } },
-			h("span", { className: "hw-dot", style: { background: "#3b82f6" } }),
-			"远程设备");
-		var chips = (remotes && remotes.length > 0)
-			? h("div", { className: "hw-chipbar" }, remotes.map(function (remote) {
-				return h(FleetChip, { key: remote.id, device: remote, activity: acts[remote.id], onClick: function () { fleetOpenDevice({ id: remote.id, name: remote.name, origin: remote.origin }); } });
-			}))
-			: null;
-		return h("div", { className: "hw-fleet" }, h("style", null, CSS), openButton, chips);
-	}
-
 	/** Full-window in-app view: pick a remote device, then iframe its dsh UI. */
 	function FleetOverlay() {
 		var store = useFleetStore();
@@ -1008,14 +956,6 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 				label: function () { return SECTION_LABEL; },
 			}, function (ownerProps) { return h(Workbench, {}); });
 			return off;
-		});
-		ctx.slots.inject("sidebar.footer.action", function () {
-			return ctx.slots.register({
-				name: "sidebar.footer.action",
-				id: "fleet-remote-open",
-				order: 5,
-				label: function () { return "远程设备"; },
-			}, function () { return h(FleetSide, {}); });
 		});
 		ctx.slots.inject("shell.overlay", function () {
 			return ctx.slots.register({
