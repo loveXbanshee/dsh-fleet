@@ -325,6 +325,36 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 		var serveTokenDraft = serveTokenState[0];
 		var setServeTokenDraft = serveTokenState[1];
 
+		/* ---- role: controller (指挥台, show dock) vs managed (被控端) ---- */
+		var roleState = React.useState("controller");
+		var roleNow = roleState[0];
+		var setRoleNow = roleState[1];
+		React.useEffect(function () {
+			if (data && data.role) setRoleNow(data.role === "managed" ? "managed" : "controller");
+		}, [data && data.role]);
+
+		/* ---- certificate helper state (modal content for one remote) ---- */
+		var certRemoteState = React.useState(null); // remote row snapshot when open
+		var certRemote = certRemoteState[0];
+		var setCertRemote = certRemoteState[1];
+		var certDataState = React.useState(null);   // { origin, chain: [...] } or null while loading
+		var certData = certDataState[0];
+		var setCertData = certDataState[1];
+		var certErrState = React.useState("");
+		var certErr = certErrState[0];
+		var setCertErr = certErrState[1];
+		function openCertHelper(remote) {
+			setCertRemote(remote);
+			setCertData(null);
+			setCertErr("");
+			get("remote-cert?remote=" + encodeURIComponent(remote.id))
+				.then(function (payload) {
+					setCertData(payload || { origin: remote.origin, chain: [] });
+				})
+				.catch(function (err) { setCertErr(String((err && err.message) || err)); });
+		}
+		function closeCertHelper() { setCertRemote(null); setCertData(null); setCertErr(""); }
+
 		/* ---- fleet gateway settings (drafts; live status comes from data.gateway) ---- */
 		var gwEnableState = React.useState(false);
 		var gwEnable = gwEnableState[0];
@@ -420,6 +450,68 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 				.finally(function () { setBusy(false); });
 		}
 
+		/** Modal: show the remote TLS chain and give copy/download install help. */
+		function downloadCert(name, chainEntry) {
+			if (!chainEntry || !chainEntry.pem) return;
+			var blob = new Blob([chainEntry.pem], { type: "application/x-pem-file" });
+			var url = URL.createObjectURL(blob);
+			var a = document.createElement("a");
+			a.href = url;
+			a.download = (name || "remote") + "-depth" + (chainEntry.depth || 0) + ".crt";
+			document.body.appendChild(a);
+			a.click();
+			setTimeout(function () { document.body.removeChild(a); URL.revokeObjectURL(url); }, 400);
+		}
+		function certModal() {
+			if (!certRemote) return null;
+			var isMac = /mac/i.test(data.platform || "");
+			var body;
+			if (certErr) {
+				body = h("div", { className: "hw-empty hw-error" }, "读取证书失败: " + certErr + " — 设备可能离线或非 HTTPS。");
+			}
+			else if (!certData) {
+				body = h("div", { className: "hw-hint" }, "正在读取 " + certRemote.origin + " 的 TLS 证书链…");
+			}
+			else if (!certData.chain || certData.chain.length === 0) {
+				body = h("div", { className: "hw-hint" }, "该地址未返回证书链(可能非 HTTPS)。");
+			}
+			else {
+				var certs = certData.chain.map(function (entry) {
+					var cn = (entry.subject && (entry.subject.CN || entry.subject.commonName)) || "证书";
+					var issuerCn = (entry.issuer && (entry.issuer.CN || entry.issuer.commonName)) || "";
+					var self = entry.depth === 0 && issuerCn === cn;
+					var label = cn + (entry.depth > 0 ? " (签发者: " + issuerCn + ")" : self ? " (自签叶证书)" : " (由 " + issuerCn + " 签发)");
+					var hintText = entry.depth === 0 && self
+						? "自签证书:把这一张(或整链根证书)装进浏览器受信任根即可让 iframe 直接打开。"
+						: entry.depth > 0 ? "这是证书链的签发者(CA),一般应信任它,而不是叶证书。" : "";
+					return h("div", { className: "hw-card", key: "c" + entry.depth, style: { margin: "6px 0" } },
+						h("div", { className: "hw-row" },
+							h("div", { className: "hw-main" },
+								h("div", { className: "hw-title" }, "深度 " + entry.depth, h("span", { className: "hw-meta" }, "SHA-256 指纹")),
+								h("div", { className: "hw-pre", style: { fontSize: 10, wordBreak: "break-all", margin: "4px 0" } }, entry.fingerprint256 || "")),
+							h("div", { className: "hw-actions" }, btn("下载 .crt", function () { downloadCert(certRemote.name || certRemote.origin, entry); }))),
+						h("div", { className: "hw-sub" }, label),
+						hintText ? h("div", { className: "hw-hint" }, hintText) : null);
+				});
+				body = h("div", null,
+					h("div", { className: "hw-hint" }, "把证书装进受信任根后,浏览器(含本插件内嵌 iframe)就不再拦截该 https 地址:"),
+					certs,
+					h("div", { className: "hw-pre", style: { fontSize: 11, whiteSpace: "pre-wrap", margin: "6px 0" } },
+						"Windows(当前用户,免管理员):\n  certutil -user -addstore Root 下载的.crt\n\n" +
+						(isMac
+							? "macOS:\n  sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain 下载的.crt\n\n"
+							: "Linux:\n  sudo cp 下载的.crt /usr/local/share/ca-certificates/ && sudo update-ca-certificates\n\n") +
+						"然后重启浏览器再试;若需覆盖全系统用户,用管理员运行同一 certutil 去掉 -user。"),
+					h("div", { className: "hw-hint" }, "注意:安装自签 CA 需自行核验指纹确属你的设备,勿导入陌生人证书。装完重新打开浏览器即可。"));
+			}
+			return h("div", { className: "hw-modal-backdrop", onClick: closeCertHelper },
+				h("div", { className: "hw-modal", onClick: function (e) { e.stopPropagation(); } },
+					h("div", { className: "hw-row" },
+						h("div", { className: "hw-main" }, h("div", { className: "hw-title" }, "证书助手: " + (certRemote.name || certRemote.origin))),
+						h("div", { className: "hw-actions" }, btn("关闭", closeCertHelper))),
+					h("div", { className: "hw-modal-body" }, body)));
+		}
+
 		if (!data) {
 			return h("div", { className: "hw" },
 				h("style", null, CSS),
@@ -505,6 +597,7 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 									: " · 不可达" + (item.error && item.error !== "unreachable" ? " (" + item.error + ")" : "") + " — 请在目标设备开启 Fleet 网关,或让 dsh 绑定局域网IP/隧道;地址不要用 127.0.0.1"))),
 					h("div", { className: "hw-actions" },
 						btn("会话", function () { loadSessions(target, false); }, { title: "读取该设备上的会话记录(需要它在同一插件里配置 serveToken)" }, !okOnline || !item.hasToken),
+						btn("证书", function () { openCertHelper(item); }, { title: "查看/导出该远程的 TLS 证书链 — 若浏览器提示不安全,可据此安装受信任证书" }, !okOnline),
 						btn("重启", function () { restartRemote(item); }, { title: "重启该远程设备的 dsh web(需要它的 serveToken)" }, !okOnline || !item.hasToken),
 						btn("窗口内打开", function () { fleetOpenDevice({ id: item.id, name: item.name, origin: item.origin }); }, { title: "在当前窗口内嵌打开该设备 dsh(可继续对话)" }, !item.online),
 						btn("新页打开", function () { openOrigin(item.origin); }, null, !item.online),
@@ -519,36 +612,63 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 				sessionPanel(target, sessions, transcripts, openIds, loadSessions, toggleTranscript, markdownOf, copyText, fmtTime));
 		});
 
+		var isManaged = roleNow === "managed";
+
+		var head = h("div", { className: "hw-head" },
+			h("div", { className: "hw-title hw-big" }, "Harness Fleet", h("span", { className: "hw-meta" }, "Fleet · v" + (data.version || "?")), h("span", { className: "hw-meta" }, "by " + BRAND),
+				h("span", { className: "hw-badge" + (isManaged ? " hw-badge-warn" : "") }, isManaged ? "被控端" : "控制端")),
+			h("div", { className: "hw-actions" },
+				btn(busy ? "刷新中…" : "刷新", function () { refresh(false); }, null, busy),
+				btn("重新扫描", function () { refresh(true); }, null, busy)));
+
 		return h("div", { className: "hw" },
 			h("style", null, CSS),
-			h("div", { className: "hw-head" },
-				h("div", { className: "hw-title hw-big" }, "Harness Fleet", h("span", { className: "hw-meta" }, "Fleet · v" + (data.version || "?")), h("span", { className: "hw-meta" }, "by " + BRAND)),
-				h("div", { className: "hw-actions" },
-					btn(busy ? "刷新中…" : "刷新", function () { refresh(false); }, null, busy),
-					btn("重新扫描", function () { refresh(true); }, null, busy))),
+			head,
 			error ? h("div", { className: "hw-error" }, error) : null,
 			h("div", { className: "hw-hint" },
 				"扫描范围 " + (data.range ? data.range.start + "–" + data.range.end : "?") + " · 当前 PID " + (selfPid || "?") + " · " + (data.platform || ""),
 				" · 会话服务: " + (data.serveSessions ? "已开启" : "未开启")),
 
-			h("div", { className: "hw-section" }, "本机 Harness 实例(仅显示运行中)"),
-			h("form", { className: "hw-add", onSubmit: function (event) { event.preventDefault(); addPinnedLocal(); } },
+			/* 角色设定(控制端/被控端) */
+			h("div", { className: "hw-section" }, "本机角色"),
+			h("div", { className: "hw-row hw-cmdrow" },
+				h("label", { className: "hw-row", style: { gap: "6px", flex: "0 1 auto", margin: 0 } },
+					h("input", { type: "radio", name: "hw-role", checked: !isManaged, onChange: function () { setRoleNow("controller"); } }),
+					h("span", null, "控制端(指挥台)")),
+				h("label", { className: "hw-row", style: { gap: "6px", flex: "0 1 auto", margin: 0 } },
+					h("input", { type: "radio", name: "hw-role", checked: isManaged, onChange: function () { setRoleNow("managed"); } }),
+					h("span", null, "被控端(仅对外服务)")),
+				btn("保存角色", function () {
+					runAction("set-role", { role: roleNow }).then(function () {
+						window.location.reload();
+					});
+				}, null, busy)),
+			h("div", { className: "hw-hint" },
+				isManaged
+					? "被控端:由其它机器(控制端)管理,本机不再显示右侧设备栏/远程列表,只保留会话服务与网关设置供外部读取。保存角色后将刷新页面生效。"
+					: "控制端:显示右侧设备栏,可登记远程、跨机读会话、一键重启等。保存角色后将刷新页面生效。"),
+
+			/* 控制端可见:本机实例 + 远程管理;被控端隐藏 */
+			!isManaged ? h("div", { className: "hw-section" }, "本机 Harness 实例(仅显示运行中)") : null,
+			!isManaged ? h("form", { className: "hw-add", onSubmit: function (event) { event.preventDefault(); addPinnedLocal(); } },
 				h("input", { className: "hw-input", style: { flex: "0 1 110px" }, placeholder: "端口", value: addPort, onChange: function (e) { setAddPort(e.target.value); } }),
 				h("input", { className: "hw-input", style: { flex: "2 1 240px" }, placeholder: "启动命令(可选, ${port} 会被替换)", value: addPortCmd, onChange: function (e) { setAddPortCmd(e.target.value); } }),
-				h("button", { className: "hw-btn", type: "submit", disabled: busy }, "手动添加端口")),
-			h("div", { className: "hw-hint" }, "未运行的端口不会自动出现;需要管理/启动某个固定端口时,用它上面的表单手动添加(可选配启动命令)。"),
-			localCards.length ? localCards : h("div", { className: "hw-empty" }, "没有运行中的本地实例"),
+				h("button", { className: "hw-btn", type: "submit", disabled: busy }, "手动添加端口")) : null,
+			!isManaged ? h("div", { className: "hw-hint" }, "未运行的端口不会自动出现;需要管理/启动某个固定端口时,用它上面的表单手动添加(可选配启动命令)。") : null,
+			!isManaged && localCards.length ? localCards : null,
+			(!isManaged && !localCards.length) ? h("div", { className: "hw-empty" }, "没有运行中的本地实例") : null,
 
-			h("div", { className: "hw-section" }, "远程 Harness"),
-			h("form", { className: "hw-add", onSubmit: submitRemote },
+			!isManaged ? h("div", { className: "hw-section" }, "远程 Harness") : null,
+			!isManaged ? h("form", { className: "hw-add", onSubmit: submitRemote },
 				h("input", { className: "hw-input", style: { flex: "1 1 130px" }, placeholder: "名称(可选)", value: addName, onChange: function (e) { setAddName(e.target.value); } }),
 				h("input", { className: "hw-input", style: { flex: "1 1 190px" }, placeholder: "http://主机:端口", value: addOrigin, onChange: function (e) { setAddOrigin(e.target.value); } }),
 				h("input", { className: "hw-input", style: { flex: "1 1 140px" }, placeholder: "会话令牌(可选)", value: addToken, onChange: function (e) { setAddToken(e.target.value); } }),
 				h("label", { className: "hw-row", style: { gap: "6px", flex: "0 1 auto" } },
 					h("input", { type: "checkbox", checked: addInsecure, onChange: function (e) { setAddInsecure(e.target.checked); } }),
 					h("span", { className: "hw-hint" }, "信任自签 https")),
-				h("button", { className: "hw-btn", type: "submit", disabled: busy }, "添加并探测")),
-			remoteCards.length ? remoteCards : h("div", { className: "hw-empty" }, "尚未添加远程 Harness"),
+				h("button", { className: "hw-btn", type: "submit", disabled: busy }, "添加并探测")) : null,
+			!isManaged && remoteCards.length ? remoteCards : null,
+			(!isManaged && !remoteCards.length) ? h("div", { className: "hw-empty" }, "尚未添加远程 Harness") : null,
 
 			h("div", { className: "hw-section" }, "允许其他设备读取本机会话"),
 			h("div", { className: "hw-row hw-cmdrow" },
@@ -592,6 +712,8 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 						? btn("更新并重启", function () { doSelfUpdate(); }, { className: "hw-btn hw-btn-primary" }, updateBusy)
 						: null)),
 			h("div", { className: "hw-hint" }, "测试期版本迭代频繁:任一设备检测到新版后可在此一键更新(插件宿主自动执行 pnpm add github:loveXbanshee/dsh-fleet,完成后自动重启 dsh web)。非 Windows 需手动重启。"),
+
+			certModal(),
 
 			h("div", { className: "hw-foot" },
 				"dsh-fleet " + BRAND + " · 「本机会话」= 读取当前 DSH_HOME 的会话日志。跨设备继续旧对话:打开远端 Web 界面进入原会话即可续聊(记录不会重开),或把会话复制为 Markdown 到本地新会话。"));
@@ -687,6 +809,10 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 		".hw-big{font-size:15px}",
 		".hw-badge{display:inline-block;padding:0 6px;border-radius:999px;background:rgba(128,128,128,.18);font-size:11px}",
 		".hw-badge-self{background:rgba(34,197,94,.22)}",
+		".hw-badge-warn{background:rgba(234,179,8,.25);color:#ca8a04}",
+		".hw-modal-backdrop{position:fixed;inset:0;z-index:2147483700;background:rgba(0,0,0,.55);display:flex;align-items:flex-start;justify-content:center;padding:40px 16px;overflow-y:auto}",
+		".hw-modal{background:#15181e;border:1px solid rgba(255,255,255,.16);border-radius:12px;color:#e7e7ea;max-width:640px;width:100%;box-shadow:0 12px 40px rgba(0,0,0,.5);padding:14px 16px;display:flex;flex-direction:column;gap:8px}",
+		".hw-modal-body{max-height:64vh;overflow-y:auto;display:flex;flex-direction:column;gap:4px}",
 		".hw-meta{font-weight:400;opacity:.6;font-size:11px}",
 		".hw-section{margin-top:6px;font-weight:600;border-bottom:1px solid rgba(128,128,128,.25);padding-bottom:4px}",
 		".hw-card{border:1px solid rgba(128,128,128,.3);border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;gap:8px}",
@@ -1649,20 +1775,40 @@ window.__ModuleLoader__.load({ id: "dsh-fleet", factory: (require) => {
 			});
 		}
 
-		if (typeof document !== "undefined") {
-			if (document.body) {
-				if (!mountBodyDock()) registerOverlayFallback();
-			}
-			else {
-				registerOverlayFallback();
-				document.addEventListener("DOMContentLoaded", function () {
-					if (mountBodyDock() && mounted.fallbackDisposer) {
-						try { mounted.fallbackDisposer(); } catch (e) { /* ignore */ }
-						mounted.fallbackDisposer = null;
-					}
-				}, { once: true });
+		/* The dock (right device bar) is a controller-side affordance. On a
+		   "managed" (被控端) machine we must not mount it. Resolve the role
+		   from /state before mounting; if unavailable, default to controller. */
+		var dockEnabled = false;
+		function tryMountDock() {
+			if (dockEnabled) return; // already decided (or decided not)
+			dockEnabled = true;
+			if (typeof document !== "undefined") {
+				if (document.body) {
+					if (!mountBodyDock()) registerOverlayFallback();
+				}
+				else {
+					registerOverlayFallback();
+					document.addEventListener("DOMContentLoaded", function () {
+						if (mountBodyDock() && mounted.fallbackDisposer) {
+							try { mounted.fallbackDisposer(); } catch (e) { /* ignore */ }
+							mounted.fallbackDisposer = null;
+						}
+					}, { once: true });
+				}
 			}
 		}
+		try {
+			get("state").then(function (payload) {
+				var role = payload && payload.role;
+				if (role === "managed") {
+					console.info("[dsh-fleet] managed (被控端) — right dock disabled");
+					dockEnabled = true; // stay disabled
+					return;
+				}
+				tryMountDock();
+			}).catch(function () { tryMountDock(); });
+		}
+		catch (e) { tryMountDock(); }
 		ctx.effect(function () {
 			return function () {
 				try {
