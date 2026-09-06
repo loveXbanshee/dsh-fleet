@@ -21,7 +21,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const IGNORED_DIRS = new Set(['.git', 'node_modules']);
 const EXTS_JSON = new Set(['.json']);
-const ALWAYS = ['package.json', 'cordis.patch.yml', 'README.md', 'LICENSE', '.gitignore'];
+const ALWAYS = ['package.json', 'cordis.patch.yml', 'README.md', 'README.full.md', 'RELEASING.md', 'LICENSE', '.gitignore'];
 
 const explicit = process.argv.slice(2).filter((arg) => !arg.startsWith('-'));
 
