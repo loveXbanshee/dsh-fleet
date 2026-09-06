@@ -64,6 +64,9 @@ dsh plugin --profile web add github:loveXbanshee/dsh-fleet
 然后**重启一次 `dsh web`**。包声明了 `dsh.bundle`,CLI 会自动登记为 bundle 层,
 无需手改 yml。更新版本:重跑同一条命令(或上架市场后用市场更新)。
 
+> **给维护者**:发新版/打 tag/写 Release Notes,见
+> [RELEASING.md](RELEASING.md)(逐步骤 + 一键脚本)。
+
 > 注意:补丁行形态与 bundle 形态二选一 —— 已用「方式 A」补丁行时不要再跑
 > `dsh plugin add`,否则重启后重复插入。
 
